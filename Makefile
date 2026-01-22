@@ -46,6 +46,8 @@ CPPFLAGS = $(PREPROCESSOR_MACROS)
 ### Object Files
 
 OBJECTS = \
+	$(OBJDIR)/image_dc42.o \
+	$(OBJDIR)/io_utils.o \
 	$(OBJDIR)/lisafs_main.o \
 	$(OBJDIR)/lisafs.o
 
@@ -78,6 +80,12 @@ $(OBJDIR):
 
 
 ### File Dependencies
+
+src/image_dc42.c: src/lisafs_defines.h \
+				  src/image_dc42.h
+
+src/io_utils.c: src/lisafs_defines.h \
+				src/io_utils.h
 
 src/lisafs_main.c: src/lisafs.h
 

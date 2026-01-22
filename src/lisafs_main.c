@@ -3,6 +3,7 @@
 //
 //	Copyright © 2026 Base Hit Ventures, LLC. All rights reserved.
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,11 +11,13 @@
 #include <string.h>
 #include <sysexits.h>
 
+#include "image_dc42.h"
 #include "lisafs.h"
 
 
 const char *program_name;
 const char *image_file_path;
+image_dc42 image;
 const char *command_name;
 
 
@@ -81,11 +84,23 @@ int main(int argc, char **argv)
 
     // Attach the disk image.
 
-    // TODO: Implement image attach.
+    int image_err = image_dc42_open(image_file_path, &image);
+    if (image_err == -1) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error opening image '%s': %s" "\n", program_name, image_file_path, errstr);
+        print_usage();
+        return EX_NOINPUT;
+    }
 
-    // Perform the subcommand and return its result.
+    // Perform the subcommand and collect its result.
 
-    return (*function)(argc - 2, &argv[2]);
+    int exitcode = (*function)(argc - 2, &argv[2]);
+
+    // Detach the disk image.
+
+    (void) image_dc42_close(&image);
+
+    return exitcode;
 }
 
 
