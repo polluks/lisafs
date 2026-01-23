@@ -8,7 +8,6 @@
 
 #include "lisafs_defines.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 
 
@@ -51,35 +50,23 @@ typedef struct image_dc42_header image_dc42_header;
 /*!
     A DiskCopy 4.2 image. While the image is open, its file is valid.
  */
-struct image_dc42 {
-    image_dc42_header header;
-    FILE * LISAFS_NULLABLE file;
-    char * LISAFS_NULLABLE name;
-};
+struct image_dc42;
 typedef struct image_dc42 image_dc42;
 
 
 /*! Open a DiskCopy 4.2 image for use. */
-int image_dc42_open(const char * LISAFS_NONNULL path,
-                    image_dc42 * LISAFS_NONNULL image);
+image_dc42 * _Nullable image_dc42_open(const char * _Nonnull path);
 
 /*! Close an open DiskCopy 4.2 image. */
-int image_dc42_close(image_dc42 * LISAFS_NONNULL image);
+int image_dc42_close(image_dc42 * _Nullable image);
 
 /*!
-    Read the block at the given index from an open DiskCopy 4.2 image
-    into the given buffer.
+    Read the block and tag with the given index from an open DiskCopy
+    4.2 image into the given buffers.
  */
-int image_dc42_read_block(image_dc42 * LISAFS_NONNULL image,
-                          size_t block,
-                          uint8_t * LISAFS_NONNULL buf);
-
-/*!
-    Read the tags for the block at the given index from an open
-    DiskCopy 4.2 image into the given buffer.
- */
-int image_dc42_read_tag(image_dc42 * LISAFS_NONNULL image,
-                        size_t block,
-                        uint8_t * LISAFS_NONNULL buf);
+int image_dc42_read_block(image_dc42 * _Nonnull image,
+                          size_t n,
+                          uint8_t * _Nonnull block,
+                          uint8_t * _Nonnull tag);
 
 #endif /* __IMAGE_DC42__H__ */

@@ -13,14 +13,14 @@
 #include <string.h>
 #include <sysexits.h>
 
-#include "image_dc42.h"
 #include "lisafs.h"
 
 
-const char *program_name;
-const char *image_file_path;
-image_dc42 image;
-const char *command_name;
+const char *program_name = NULL;
+const char *image_file_path = NULL;
+const char *command_name = NULL;
+
+lisafs_image *image = NULL;
 
 
 int lisafs_dumpblock(int argc, char **argv);
@@ -88,8 +88,8 @@ int main(int argc, char **argv)
 
     // Attach the disk image.
 
-    int image_err = image_dc42_open(image_file_path, &image);
-    if (image_err == -1) {
+    image = lisafs_image_open(image_file_path);
+    if (image == NULL) {
         const char *errstr = strerror(errno);
         fprintf(stderr, "%s: error opening image '%s': %s" "\n", program_name, image_file_path, errstr);
         print_usage();
@@ -102,7 +102,7 @@ int main(int argc, char **argv)
 
     // Detach the disk image.
 
-    (void) image_dc42_close(&image);
+    (void) lisafs_image_close(image);
 
     return exitcode;
 }
@@ -152,14 +152,12 @@ int lisafs_dumpblock(int argc, char **argv)
     uint8_t block[512] = {0};
     uint8_t tag[12] = {0};
 
-    int read_block_err = image_dc42_read_block(&image, n, block);
+    int read_block_err = lisafs_image_read_block(image, n, block, tag);
     if (read_block_err != 0) {
-        //xxx
-    }
-
-    int read_tag_err = image_dc42_read_tag(&image, n, tag);
-    if (read_tag_err != 0) {
-        //xxx
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error reading image '%s' block %d: %s" "\n", program_name, image_file_path, n, errstr);
+        print_usage();
+        return EX_DATAERR;
     }
 
     // Produce formatted hex output.

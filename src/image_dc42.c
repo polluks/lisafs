@@ -14,57 +14,67 @@
 #include "io_utils.h"
 
 
-const size_t image_dc42_header_size = 88;
+const size_t image_dc42_header_size = 84;
 const size_t image_dc42_block_size = 512;
 const size_t image_dc42_tag_size = 12;
 
 
-int image_dc42_open(const char * LISAFS_NONNULL path,
-                    image_dc42 * LISAFS_NONNULL image)
+struct image_dc42 {
+    image_dc42_header header;
+    FILE * LISAFS_NULLABLE file;
+    char * LISAFS_NULLABLE name;
+};
+
+
+image_dc42 * _Nullable image_dc42_open(const char * _Nonnull path)
 {
-    assert(image->file == NULL);
+    image_dc42 *image = calloc(sizeof(image_dc42), 1);
+    if (image == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
 
     // Open the file.
 
     image->file = fopen(path, "r");
     if (image->file == NULL) {
-        return -1;
+        goto error;
     }
 
     // Read and validate the image header.
 
     image_dc42_header *header = &image->header;
 
-    if (read_pstring(image->file, header->volume_name, 64) == -1) goto err;
-    if (read_uint32(image->file, &header->data_size) == -1) goto err;
-    if (read_uint32(image->file, &header->tag_size) == -1) goto err;
-    if (read_uint32(image->file, &header->data_checksum) == -1) goto err;
-    if (read_uint32(image->file, &header->tag_checksum) == -1) goto err;
-    if (read_uint8(image->file, (uint8_t *)&header->encoding) == -1) goto err;
-    if (read_uint8(image->file, (uint8_t *)&header->format) == -1) goto err;
-    if (read_uint16(image->file, &header->magic_number) == -1) goto err;
+    if (read_pstring(image->file, header->volume_name, 64) == -1) goto error;
+    if (read_uint32(image->file, &header->data_size) == -1) goto error;
+    if (read_uint32(image->file, &header->tag_size) == -1) goto error;
+    if (read_uint32(image->file, &header->data_checksum) == -1) goto error;
+    if (read_uint32(image->file, &header->tag_checksum) == -1) goto error;
+    if (read_uint8(image->file, (uint8_t *)&header->encoding) == -1) goto error;
+    if (read_uint8(image->file, (uint8_t *)&header->format) == -1) goto error;
+    if (read_uint16(image->file, &header->magic_number) == -1) goto error;
 
     if (header->magic_number != 0x0100) {
         errno = EFTYPE;
-        goto err;
+        goto error;
     }
 
     // Grab the image name in a more convenient format.
 
     image->name = calloc(sizeof(char), 64);
-    if (image->name == NULL) goto err;
+    if (image->name == NULL) goto error;
     strncpy(image->name, &header->volume_name[1], header->volume_name[0]);
 
-    return 0;
+    return image;
 
-err:
+error:
     image_dc42_close(image);
-    return -1;
+    return NULL;
 }
 
-int image_dc42_close(image_dc42 * LISAFS_NONNULL image)
+int image_dc42_close(image_dc42 * _Nullable image)
 {
-    assert(image->file != NULL);
+    if (image == NULL) return 0;
 
     int savederrno = errno; // don't let the act of saving destroy errno
 
@@ -73,6 +83,8 @@ int image_dc42_close(image_dc42 * LISAFS_NONNULL image)
 
     free(image->name);
     image->name = NULL;
+
+    free(image);
 
     errno = savederrno;
 
@@ -87,7 +99,7 @@ int image_dc42_close(image_dc42 * LISAFS_NONNULL image)
  */
 
 inline
-static off_t image_dc42_offset_for_block(image_dc42 * LISAFS_NONNULL image,
+static off_t image_dc42_offset_for_block(image_dc42 * _Nonnull image,
                                          size_t block)
 {
     return image_dc42_header_size
@@ -95,7 +107,7 @@ static off_t image_dc42_offset_for_block(image_dc42 * LISAFS_NONNULL image,
 }
 
 inline
-static off_t image_dc42_offset_for_tag(image_dc42 * LISAFS_NONNULL image,
+static off_t image_dc42_offset_for_tag(image_dc42 * _Nonnull image,
                                        size_t block)
 {
     // An image can have no tags, so just treat those cases as all 0.
@@ -107,49 +119,40 @@ static off_t image_dc42_offset_for_tag(image_dc42 * LISAFS_NONNULL image,
          + (block * image_dc42_tag_size);
 }
 
-int image_dc42_read_block(image_dc42 * LISAFS_NONNULL image,
-                          size_t block,
-                          uint8_t * LISAFS_NONNULL buf)
+int image_dc42_read_block(image_dc42 * _Nonnull image,
+                          size_t n,
+                          uint8_t * _Nonnull block,
+                          uint8_t * _Nonnull tag)
 {
     assert(image->file != NULL);
 
-    off_t block_off = image_dc42_offset_for_block(image, block);
+    off_t block_off = image_dc42_offset_for_block(image, n);
 
     int seek_err = fseeko(image->file, block_off, SEEK_SET);
     if (seek_err == -1) {
         return -1;
     }
 
-    size_t read_bytes = fread(buf, image_dc42_block_size, 1, image->file);
-    if (read_bytes != image_dc42_block_size) {
+    size_t read_items = fread(block, image_dc42_block_size, 1, image->file);
+    if (read_items != 1) {
         errno = ferror(image->file);
         return -1;
     }
 
-    return 0;
-}
+    off_t tag_off = image_dc42_offset_for_tag(image, n);
+    if (tag_off != 0) {
+        int seek_err = fseeko(image->file, tag_off, SEEK_SET);
+        if (seek_err == -1) {
+            return -1;
+        }
 
-int image_dc42_read_tag(image_dc42 * LISAFS_NONNULL image,
-                        size_t block,
-                        uint8_t * LISAFS_NONNULL buf)
-{
-    assert(image->file != NULL);
-
-    const off_t tag_off = image_dc42_offset_for_tag(image, block);
-    if (tag_off == 0) {
-        memset(buf, 0, 12);
-        return 0;
-    }
-
-    int seek_err = fseeko(image->file, tag_off, SEEK_SET);
-    if (seek_err == -1) {
-        return -1;
-    }
-
-    size_t read_bytes = fread(buf, image_dc42_tag_size, 1, image->file);
-    if (read_bytes != image_dc42_tag_size) {
-        errno = ferror(image->file);
-        return -1;
+        size_t read_items = fread(tag, image_dc42_tag_size, 1, image->file);
+        if (read_items != 1) {
+            errno = ferror(image->file);
+            return -1;
+        }
+    } else {
+        memset(tag, 0, image_dc42_tag_size);
     }
 
     return 0;
