@@ -81,12 +81,16 @@ $(OBJDIR):
 
 ### File Dependencies
 
-src/image_dc42.c: src/lisafs_defines.h \
-				  src/image_dc42.h
+src/image_dc42.c: src/image_dc42.h \
+				  src/lisafs_defines.h
 
-src/io_utils.c: src/lisafs_defines.h \
-				src/io_utils.h
+src/io_utils.c: src/io_utils.h \
+				src/lisafs_defines.h
 
-src/lisafs_main.c: src/lisafs.h
+src/lisafs_main.c: src/lisafs.h \
+				   src/lisafs_defines.h \
+				   src/image_dc42.h
 
-src/lisafs.c: src/lisafs.h
+src/lisafs.c: src/lisafs.h \
+			  src/lisafs_defines.h \
+			  src/image_dc42.h

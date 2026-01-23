@@ -25,8 +25,8 @@ lisafs_image *image = NULL;
 
 
 int lisafs_dumpblock(int argc, char **argv);
+int lisafs_fsinfo(int argc, char **argv);
 int lisafs_imageinfo(int argc, char **argv);
-int lisafs_ls(int argc, char **argv);
 
 
 typedef int (*lisafs_command_func)(int argc, char **argv);
@@ -34,10 +34,11 @@ typedef int (*lisafs_command_func)(int argc, char **argv);
 struct lisafs_command {
     const char * const name;
     lisafs_command_func function;
+    const char * const description;
 } lisafs_commands[] = {
-    { "dumpblock", lisafs_dumpblock },
-    { "imageinfo", lisafs_imageinfo },
-    { "ls", lisafs_ls },
+    { "dumpblock",  lisafs_dumpblock,   "dumpblock n" "\t- hex dump raw block n" },
+    { "fsinfo",     lisafs_fsinfo,      "fsinfo"      "\t- print filesystem info" },
+    { "imageinfo",  lisafs_imageinfo,   "imageinfo"   "\t- print disk image info" },
     { NULL, NULL },
 };
 
@@ -47,9 +48,15 @@ void print_usage(void)
     fprintf(stderr, "Usage:" "\n");
     fprintf(stderr, " %s image-file <command> [args]" "\n", program_name);
     fprintf(stderr, " Commands are:" "\n");
-    fprintf(stderr, "  dumpblock n" "\t- hex dump raw block n" "\n");
-    fprintf(stderr, "  imageinfo"   "\t- print disk image info" "\n");
-    fprintf(stderr, "  ls [path]"   "\t- list directory at path or root" "\n");
+
+    struct lisafs_command *command = NULL;
+    const size_t lisafs_commands_count = sizeof(lisafs_commands) / sizeof(struct lisafs_command);
+    for (int i = 0; i < lisafs_commands_count; i++) {
+        command = &lisafs_commands[i];
+        if (command->name == NULL) break;
+
+        fprintf(stderr, "  %s" "\n", command->description);
+    }
 }
 
 
@@ -186,6 +193,116 @@ int lisafs_dumpblock(int argc, char **argv)
     return EX_OK;
 }
 
+const char * timestr(lisafs_timestamp timestamp)
+{
+    static struct tm tm;
+    static char buf[26];
+
+    if (timestamp == 0) return "never";
+
+    time_t time = lisafs_timestamp_to_time_t(timestamp);
+    gmtime_r(&time, &tm);
+    asctime_r(&tm, buf);
+    char *newline = strchr(buf, '\n');
+    if (newline) *newline = '\0';
+    return buf;
+}
+
+#define OFFSET(a,b) ((void *)&(a->b) - (void *)a)
+#define DEFPRINT(s,m, f) \
+    fprintf(stdout, "" #m ":\t" f " (%td)" "\n", s->m, OFFSET(s, m))
+
+int lisafs_fsinfo(int argc, char **argv)
+{
+    lisafs_mf_loader_loader_header *header = lisafs_image_get_loader_header(image);
+    assert(header != NULL);
+
+    fprintf(stdout, "*** Loader Loader Header (block 0)" "\n");
+    fprintf(stdout, "JMP:\t\t"          "0x%08x (%td)"  "\n", header->jmp, OFFSET(header, jmp));
+    fprintf(stdout, "Boot ID:\t"        "0x%04hx (%td)" "\n", header->boot_id, OFFSET(header, boot_id));
+    fprintf(stdout, "Loader Vers:\t"    "0x%04hx (%td)" "\n", header->ldr_version, OFFSET(header, ldr_version));
+    fprintf(stdout, "Global Size:\t"    "0x%04hx (%td)" "\n", header->globalsize, OFFSET(header, globalsize));
+    fprintf(stdout, "Code Size:\t"      "0x%04hx (%td)" "\n", header->codesize, OFFSET(header, codesize));
+    fprintf(stdout, "PC Offset:\t"      "0x%04hx (%td)" "\n", header->pc_offset, OFFSET(header, pc_offset));
+    fprintf(stdout, "Block 0 Offset:\t" "%d (%td)"      "\n", header->fs_block0, OFFSET(header, fs_block0));
+    fprintf(stdout, "\n");
+
+    lisafs_mddf *mddf = lisafs_image_get_mddf(image);
+    assert(mddf != NULL);
+
+    fprintf(stdout, "*** Media Description Data File (block %d)" "\n", header->fs_block0);
+    fprintf(stdout, "Version:\t\t"          "%s (%td)" "\n", lisafs_fsversion_string(mddf->fsversion), OFFSET(mddf, fsversion));
+    fprintf(stdout, "Volume ID:\t\t"        "0x%08x:%08x (%td)""\n", mddf->volid.a, mddf->volid.b, OFFSET(mddf, volid));
+    fprintf(stdout, "Volume Number:\t\t"    "0x%04hx (%td)" "\n", mddf->volnum, OFFSET(mddf, volnum));
+    fprintf(stdout, "Volume Name:\t\t"      "'%s' (%td)" "\n", lisafs_image_get_volname(image), OFFSET(mddf, volname));
+    fprintf(stdout, "Volume Password:\t"    "'%s' (%td)" "\n", lisafs_image_get_password(image), OFFSET(mddf, password));
+    DEFPRINT(mddf, init_machine_id, "%d");
+    DEFPRINT(mddf, master_machine_id, "%d");
+    fprintf(stdout, "Date Created:\t\t"     "%s (%td)" "\n", timestr(mddf->DT_created), OFFSET(mddf, DT_created));
+    fprintf(stdout, "Date Copy Created:\t"  "%s (%td)" "\n", timestr(mddf->DT_copy_created), OFFSET(mddf, DT_copy_created));
+    fprintf(stdout, "Date Copied:\t\t"      "%s (%td)" "\n", timestr(mddf->DT_copied), OFFSET(mddf, DT_copied));
+    fprintf(stdout, "Date Scavenged:\t\t"   "%s (%td)" "\n", timestr(mddf->DT_scavenged), OFFSET(mddf, DT_scavenged));
+    DEFPRINT(mddf, copy_thread, "%d");
+    DEFPRINT(mddf, firstblock, "%d");
+    DEFPRINT(mddf, lastblock, "%d");
+    DEFPRINT(mddf, lastfspage, "%d");
+    DEFPRINT(mddf, blockcount, "%d");
+    DEFPRINT(mddf, blocksize, "%hd");
+    DEFPRINT(mddf, datasize, "%hd");
+    DEFPRINT(mddf, cluster_size, "%hd");
+    fprintf(stdout, "MDDF Address:\t\t"     "%u (%td)" "\n", mddf->MDDFaddr, OFFSET(mddf, MDDFaddr));
+    fprintf(stdout, "MDDF Size:\t\t"        "%hu (%td)" "\n", mddf->MDDFsize, OFFSET(mddf, MDDFsize));
+    fprintf(stdout, "Bitmap Address:\t\t"   "%u (%td)" "\n", mddf->bitmap_addr, OFFSET(mddf, bitmap_addr));
+    fprintf(stdout, "Bitmap Size:\t\t"      "%u bits (%td)" "\n", mddf->bitmap_size, OFFSET(mddf, bitmap_size));
+    fprintf(stdout, "Bitmap Bytes:\t\t"     "%hu (%td)" "\n", mddf->bitmap_bytes, OFFSET(mddf, bitmap_bytes));
+    fprintf(stdout, "Bitmap Pages:\t\t"     "%hu (%td)" "\n", mddf->bitmap_pages, OFFSET(mddf, bitmap_pages));
+    fprintf(stdout, "S-list Address:\t\t"   "%u (%td)" "\n", mddf->slist_addr, OFFSET(mddf, slist_addr));
+    fprintf(stdout, "S-list Packing:\t\t"   "%hu (%td)" "\n", mddf->slist_packing, OFFSET(mddf, slist_packing));
+    fprintf(stdout, "S-list Blocks:\t\t"    "%hu (%td)" "\n", mddf->slist_block_count, OFFSET(mddf, slist_block_count));
+    fprintf(stdout, "First File:\t\t"       "%hu (%td)" "\n", mddf->first_file, OFFSET(mddf, first_file));
+    fprintf(stdout, "Empty File:\t\t"       "%hu (%td)" "\n", mddf->empty_file, OFFSET(mddf, empty_file));
+    fprintf(stdout, "Max Files:\t\t"        "%hu (%td)" "\n", mddf->maxfiles, OFFSET(mddf, maxfiles));
+    DEFPRINT(mddf, hintsize, "%hd");
+    DEFPRINT(mddf, leader_offset, "%hd");
+    DEFPRINT(mddf, leader_pages, "%hd");
+    DEFPRINT(mddf, flabel_offset, "%hd");
+    DEFPRINT(mddf, unusedi1, "%hd");
+    DEFPRINT(mddf, map_offset, "%hd");
+    DEFPRINT(mddf, map_size, "%hd");
+    fprintf(stdout, "File Count:\t\t"       "%hu (%td)" "\n", mddf->filecount, OFFSET(mddf, filecount));
+    DEFPRINT(mddf, freestart, "%d");
+    DEFPRINT(mddf, unusedl1, "%d");
+    DEFPRINT(mddf, freecount, "%d");
+    fprintf(stdout, "Root S-file:\t\t"      "%hu (%td)" "\n", mddf->rootsnum, OFFSET(mddf, rootsnum));
+    fprintf(stdout, "Root Maximum:\t\t"     "%hu entries (%td)" "\n", mddf->rootmaxentries, OFFSET(mddf, rootmaxentries));
+    DEFPRINT(mddf, mountinfo, "%hd");
+    fprintf(stdout, "Overmount Stamp:\t"    "0x%08x:%08x (%td)""\n", mddf->overmount_stamp.a, mddf->overmount_stamp.b, OFFSET(mddf, overmount_stamp));
+    fprintf(stdout, "Pmem Machine ID:\t"    "%d (%td)" "\n", mddf->pmem_id, OFFSET(mddf, pmem_id));
+    for (int i = 0; i < 32; i++) {
+        if ((i % 8) == 0) fprintf(stdout, "pmem[%d]:\t\t", i);
+        fprintf(stdout, "0x%04hx ", mddf->pmem[i]);
+        if ((i % 8) == 7) fprintf(stdout, "(%td)\n", OFFSET(mddf, pmem[i - 7]));
+    }
+    DEFPRINT(mddf, vol_scavenged, "%hd");
+    DEFPRINT(mddf, tbt_copied, "%hd");
+    DEFPRINT(mddf, smallmap_offset, "%hd");
+    DEFPRINT(mddf, hentry_offset, "%hd");
+    fprintf(stdout, "Backup Volume ID:\t"   "0x%08x:%08x (%td)""\n", mddf->backup_volid.a, mddf->backup_volid.b, OFFSET(mddf, backup_volid));
+    DEFPRINT(mddf, flabel_size, "%hd");
+    DEFPRINT(mddf, fs_overhead, "%hd");
+    DEFPRINT(mddf, result_scavenge, "%hd");
+    DEFPRINT(mddf, boot_code, "%hd");
+    DEFPRINT(mddf, boot_environ, "%hd");
+    DEFPRINT(mddf, oem_id, "%d");
+    DEFPRINT(mddf, root_page, "%d");
+    DEFPRINT(mddf, tree_depth, "%hd");
+    DEFPRINT(mddf, node_id, "%hd");
+    DEFPRINT(mddf, vol_seq_no, "%hd");
+    DEFPRINT(mddf, vol_mounted, "%hd");
+
+    return EX_OK;
+}
+
 
 int lisafs_imageinfo(int argc, char **argv)
 {
@@ -205,14 +322,6 @@ int lisafs_imageinfo(int argc, char **argv)
     fprintf(stdout, "Encoding:\t"   "%s" "\n", image_dc42_get_encoding_name(header->encoding));
     fprintf(stdout, "Format:\t\t"   "0x%02x" "\n", header->format.gcr);
     fprintf(stdout, "Magic:\t\t"    "0x%04x" "\n", header->magic_number);
-
-    return EX_OK;
-}
-
-
-int lisafs_ls(int argc, char **argv)
-{
-    // TODO: Implement ls command.
 
     return EX_OK;
 }
