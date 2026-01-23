@@ -94,6 +94,11 @@ lisafs_image * _Nullable lisafs_image_open(const char * _Nonnull const path);
 int lisafs_image_close(lisafs_image * _Nullable image);
 
 /*!
+    Get the raw disk image underlying this filesystem image.
+ */
+void * _Nonnull lisafs_image_get_raw_image(lisafs_image * _Nonnull image);
+
+/*!
     Read both the raw data and tag bytes of physical block n from the
     given open Lisa disk image.
  */

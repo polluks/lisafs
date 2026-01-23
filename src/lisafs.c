@@ -88,10 +88,13 @@ int lisafs_image_close(lisafs_image * _Nullable image)
     return 0;
 }
 
-/*!
-    Read both the raw data and tag bytes of physical block n from the
-    given open Lisa disk image.
- */
+void * _Nonnull lisafs_image_get_raw_image(lisafs_image * _Nonnull image)
+{
+    assert(image->image != NULL);
+
+    return image->image;
+}
+
 int lisafs_image_read_block(lisafs_image * _Nonnull image,
                             size_t n,
                             lisafs_block _Nonnull block,
@@ -102,11 +105,6 @@ int lisafs_image_read_block(lisafs_image * _Nonnull image,
     return image_dc42_read_block(image->image, n, block, tag);
 }
 
-/*!
-    Read both the data and label of page n from the given Lisa disk
-    image. This takes into account things like the disk (not image)
-    header, since page 0 almost certainly isn't physical block 0.
- */
 int lisafs_image_read_page(lisafs_image * _Nonnull image,
                            size_t n,
                            lisafs_page _Nonnull page,

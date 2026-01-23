@@ -91,6 +91,31 @@ int image_dc42_close(image_dc42 * _Nullable image)
     return 0;
 }
 
+image_dc42_header * _Nonnull image_dc42_get_header(image_dc42 * _Nonnull image)
+{
+    return &image->header;
+}
+
+const char * _Nonnull const image_dc42_get_name(image_dc42 * _Nonnull image)
+{
+    return image->name;
+}
+
+const char * _Nonnull image_dc42_get_encoding_name(image_dc42_encoding encoding)
+{
+    static char buf[32] = {0};
+    switch (encoding) {
+        case gcr_clv_ssdd: return "3.5in 400KB GCR";
+        case gcr_clv_dsdd: return "3.5in 800KB GCR";
+        case mfm_cav_dsdd: return "3.5in 720KB MFM";
+        case mfm_cav_dshd: return "3.5in 1440KB MFM";
+        default:
+            snprintf(buf, 32, "Unknown (0x%02x)", encoding);
+            break;
+    }
+    return buf;
+}
+
 /*
     NOTE: We're not currently considering interleave under the
           assumption that interleave information is recorded in a disk

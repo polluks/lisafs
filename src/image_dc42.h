@@ -60,6 +60,15 @@ image_dc42 * _Nullable image_dc42_open(const char * _Nonnull path);
 /*! Close an open DiskCopy 4.2 image. */
 int image_dc42_close(image_dc42 * _Nullable image);
 
+/*! Get the header of this image. */
+image_dc42_header * _Nonnull image_dc42_get_header(image_dc42 * _Nonnull image);
+
+/*! Get the name of this image. */
+const char * _Nonnull const image_dc42_get_name(image_dc42 * _Nonnull image);
+
+/*! Get the name of the given encoding. */
+const char * _Nonnull image_dc42_get_encoding_name(image_dc42_encoding encoding);
+
 /*!
     Read the block and tag with the given index from an open DiskCopy
     4.2 image into the given buffers.

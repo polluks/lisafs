@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sysexits.h>
 
+#include "image_dc42.h"
 #include "lisafs.h"
 
 
@@ -24,6 +25,7 @@ lisafs_image *image = NULL;
 
 
 int lisafs_dumpblock(int argc, char **argv);
+int lisafs_imageinfo(int argc, char **argv);
 int lisafs_ls(int argc, char **argv);
 
 
@@ -34,6 +36,7 @@ struct lisafs_command {
     lisafs_command_func function;
 } lisafs_commands[] = {
     { "dumpblock", lisafs_dumpblock },
+    { "imageinfo", lisafs_imageinfo },
     { "ls", lisafs_ls },
     { NULL, NULL },
 };
@@ -43,6 +46,10 @@ void print_usage(void)
 {
     fprintf(stderr, "Usage:" "\n");
     fprintf(stderr, " %s image-file <command> [args]" "\n", program_name);
+    fprintf(stderr, " Commands are:" "\n");
+    fprintf(stderr, "  dumpblock n" "\t- hex dump raw block n" "\n");
+    fprintf(stderr, "  imageinfo"   "\t- print disk image info" "\n");
+    fprintf(stderr, "  ls [path]"   "\t- list directory at path or root" "\n");
 }
 
 
@@ -143,7 +150,11 @@ void print_hex_bytes_line(const uint8_t * const bytes, size_t n)
 
 int lisafs_dumpblock(int argc, char **argv)
 {
-    assert(argc >= 2);
+    if (argc < 2) {
+        fprintf(stderr, "%s: dumpblock: insufficient arguments" "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
 
     int32_t n = atol(argv[1]);
 
@@ -171,6 +182,29 @@ int lisafs_dumpblock(int argc, char **argv)
         fprintf(stdout, "%04x:\t", b);
         print_hex_bytes_line(&block[b], 16);
     }
+
+    return EX_OK;
+}
+
+
+int lisafs_imageinfo(int argc, char **argv)
+{
+    image_dc42 *raw_image = lisafs_image_get_raw_image(image);
+    assert(raw_image != NULL);
+
+    image_dc42_header *header = image_dc42_get_header(raw_image);
+    assert(header != NULL);
+
+    const char * const name = image_dc42_get_name(raw_image);
+    assert(name != NULL);
+
+    fprintf(stdout, "Name:\t\t"     "'%s'" "\n", name);
+    fprintf(stdout, "Type:\t\t"     "DiskCopy 4.2" "\n");
+    fprintf(stdout, "Data size:\t"  "%u (%u)" "\n", header->data_size, header->data_size / 512);
+    fprintf(stdout, "Tag size:\t"   "%u (%u)" "\n", header->tag_size, header->tag_size / 12);
+    fprintf(stdout, "Encoding:\t"   "%s" "\n", image_dc42_get_encoding_name(header->encoding));
+    fprintf(stdout, "Format:\t\t"   "0x%02x" "\n", header->format.gcr);
+    fprintf(stdout, "Magic:\t\t"    "0x%04x" "\n", header->magic_number);
 
     return EX_OK;
 }
