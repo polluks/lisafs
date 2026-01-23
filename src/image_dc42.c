@@ -14,12 +14,13 @@
 #include "io_utils.h"
 
 
-const size_t image_dc42_header_size = sizeof(image_dc42_header);
+const size_t image_dc42_header_size = 88;
 const size_t image_dc42_block_size = 512;
 const size_t image_dc42_tag_size = 12;
 
 
-int image_dc42_open(const char * LISAFS_NONNULL path, image_dc42 * LISAFS_NONNULL image)
+int image_dc42_open(const char * LISAFS_NONNULL path,
+                    image_dc42 * LISAFS_NONNULL image)
 {
     assert(image->file == NULL);
 
@@ -30,29 +31,29 @@ int image_dc42_open(const char * LISAFS_NONNULL path, image_dc42 * LISAFS_NONNUL
         return -1;
     }
 
-    // Read the header.
+    // Read and validate the image header.
 
-    if (read_pstring(image->file, image->header.volume_name, 64) == -1) goto err;
-    if (read_uint32(image->file, &image->header.data_size) == -1) goto err;
-    if (read_uint32(image->file, &image->header.tag_size) == -1) goto err;
-    if (read_uint32(image->file, &image->header.data_checksum) == -1) goto err;
-    if (read_uint32(image->file, &image->header.tag_checksum) == -1) goto err;
-    if (read_uint8(image->file, (uint8_t *)&image->header.encoding) == -1) goto err;
-    if (read_uint8(image->file, (uint8_t *)&image->header.format) == -1) goto err;
-    if (read_uint16(image->file, &image->header.magic_number) == -1) goto err;
+    image_dc42_header *header = &image->header;
 
-    // Validate the header.
+    if (read_pstring(image->file, header->volume_name, 64) == -1) goto err;
+    if (read_uint32(image->file, &header->data_size) == -1) goto err;
+    if (read_uint32(image->file, &header->tag_size) == -1) goto err;
+    if (read_uint32(image->file, &header->data_checksum) == -1) goto err;
+    if (read_uint32(image->file, &header->tag_checksum) == -1) goto err;
+    if (read_uint8(image->file, (uint8_t *)&header->encoding) == -1) goto err;
+    if (read_uint8(image->file, (uint8_t *)&header->format) == -1) goto err;
+    if (read_uint16(image->file, &header->magic_number) == -1) goto err;
 
-    if (image->header.magic_number != 0x0100) {
+    if (header->magic_number != 0x0100) {
         errno = EFTYPE;
         goto err;
     }
 
-    // Grab our name in a more convenient format.
+    // Grab the image name in a more convenient format.
 
     image->name = calloc(sizeof(char), 64);
     if (image->name == NULL) goto err;
-    strncpy(image->name, &image->header.volume_name[1], image->header.volume_name[0]);
+    strncpy(image->name, &header->volume_name[1], header->volume_name[0]);
 
     return 0;
 
@@ -78,13 +79,41 @@ int image_dc42_close(image_dc42 * LISAFS_NONNULL image)
     return 0;
 }
 
+/*
+    NOTE: We're not currently considering interleave under the
+          assumption that interleave information is recorded in a disk
+          image so it can be accurately written, but that the blocks in
+          the image are stored in logical rather than physical order.
+ */
+
+inline
+static off_t image_dc42_offset_for_block(image_dc42 * LISAFS_NONNULL image,
+                                         size_t block)
+{
+    return image_dc42_header_size
+         + (block * image_dc42_block_size);
+}
+
+inline
+static off_t image_dc42_offset_for_tag(image_dc42 * LISAFS_NONNULL image,
+                                       size_t block)
+{
+    // An image can have no tags, so just treat those cases as all 0.
+
+    if (image->header.tag_size == 0) return 0;
+
+    return image_dc42_header_size
+         + image->header.data_size
+         + (block * image_dc42_tag_size);
+}
+
 int image_dc42_read_block(image_dc42 * LISAFS_NONNULL image,
                           size_t block,
                           uint8_t * LISAFS_NONNULL buf)
 {
     assert(image->file != NULL);
 
-    off_t block_off = image_dc42_header_size + (block * image_dc42_block_size);
+    off_t block_off = image_dc42_offset_for_block(image, block);
 
     int seek_err = fseeko(image->file, block_off, SEEK_SET);
     if (seek_err == -1) {
@@ -106,9 +135,11 @@ int image_dc42_read_tag(image_dc42 * LISAFS_NONNULL image,
 {
     assert(image->file != NULL);
 
-    const off_t tag_off = image_dc42_header_size
-                        + image->header.data_size
-                        + (block * image_dc42_tag_size);
+    const off_t tag_off = image_dc42_offset_for_tag(image, block);
+    if (tag_off == 0) {
+        memset(buf, 0, 12);
+        return 0;
+    }
 
     int seek_err = fseeko(image->file, tag_off, SEEK_SET);
     if (seek_err == -1) {

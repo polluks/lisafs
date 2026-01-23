@@ -3,6 +3,8 @@
 //
 //	Copyright © 2026 Base Hit Ventures, LLC. All rights reserved.
 
+#include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -21,15 +23,17 @@ image_dc42 image;
 const char *command_name;
 
 
+int lisafs_dumpblock(int argc, char **argv);
 int lisafs_ls(int argc, char **argv);
 
 
 typedef int (*lisafs_command_func)(int argc, char **argv);
 
 struct lisafs_command {
-    const char *name;
+    const char * const name;
     lisafs_command_func function;
 } lisafs_commands[] = {
+    { "dumpblock", lisafs_dumpblock },
     { "ls", lisafs_ls },
     { NULL, NULL },
 };
@@ -101,6 +105,76 @@ int main(int argc, char **argv)
     (void) image_dc42_close(&image);
 
     return exitcode;
+}
+
+
+void print_hex_bytes_line(const uint8_t * const bytes, size_t n)
+{
+    assert(n <= 16);
+
+    // Print hex (and pad if necessary)
+
+    for (size_t i = 0; i < n; i++) {
+        fprintf(stdout, "%02x ", bytes[i]);
+    }
+
+    if (n < 16) {
+        for (size_t i = 0; i < (16 - n); i++) {
+            fprintf(stdout, "   ");
+        }
+    }
+
+    // Print divider
+
+    fprintf(stdout, "| ");
+
+    // Print text
+
+    for (size_t i = 0; i < n; i++) {
+        char ch = (isascii(bytes[i]) && isprint(bytes[i])) ? bytes[i] : '.';
+        fprintf(stdout, "%c", ch);
+    }
+
+    // Print trailing newline.
+
+    fprintf(stdout, "\n");
+}
+
+
+int lisafs_dumpblock(int argc, char **argv)
+{
+    assert(argc >= 2);
+
+    int32_t n = atol(argv[1]);
+
+    // Read the block and its tag.
+
+    uint8_t block[512] = {0};
+    uint8_t tag[12] = {0};
+
+    int read_block_err = image_dc42_read_block(&image, n, block);
+    if (read_block_err != 0) {
+        //xxx
+    }
+
+    int read_tag_err = image_dc42_read_tag(&image, n, tag);
+    if (read_tag_err != 0) {
+        //xxx
+    }
+
+    // Produce formatted hex output.
+
+    fprintf(stdout, "Block:\t%d" "\n", n);
+    fprintf(stdout, "Tag:\t");
+    print_hex_bytes_line(tag, 12);
+    fprintf(stdout, "Data:" "\n");
+
+    for (int b = 0; b < 0x200; b += 16) {
+        fprintf(stdout, "%04x:\t", b);
+        print_hex_bytes_line(&block[b], 16);
+    }
+
+    return EX_OK;
 }
 
 
