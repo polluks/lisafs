@@ -28,6 +28,7 @@ int lisafs_dumpblock(int argc, char **argv);
 int lisafs_dumppage(int argc, char **argv);
 int lisafs_fsinfo(int argc, char **argv);
 int lisafs_imageinfo(int argc, char **argv);
+int lisafs_sfextract(int argc, char **argv);
 
 
 typedef int (*lisafs_command_func)(int argc, char **argv);
@@ -41,6 +42,7 @@ struct lisafs_command {
     { "dumppage",   lisafs_dumppage,    "dumppage n"  "\t- hex dump of raw page n" },
     { "fsinfo",     lisafs_fsinfo,      "fsinfo"      "\t- print filesystem info" },
     { "imageinfo",  lisafs_imageinfo,   "imageinfo"   "\t- print disk image info" },
+    { "sfextract",  lisafs_sfextract,   "sfextrct n"  "\t- extract sfile n (using labels)" },
     { NULL, NULL },
 };
 
@@ -375,4 +377,75 @@ int lisafs_imageinfo(int argc, char **argv)
     fprintf(stdout, "Magic:\t\t"    "0x%04x" "\n", header->magic_number);
 
     return EX_OK;
+}
+
+
+int lisafs_sfextract(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "%s: sfextract: insufficient arguments" "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
+
+    long input_fileid = atol(argv[1]);
+    if ((input_fileid < 0) || (input_fileid > 32767)) {
+        fprintf(stderr, "%s: sfextract: invalid file ID %ld" "\n", program_name, input_fileid);
+        print_usage();
+        return EX_USAGE;
+    }
+    const lisafs_fileid fileid = input_fileid;
+
+    lisafs_mddf *mddf = lisafs_image_get_mddf(image);
+    assert(mddf != NULL);
+
+    // Do a linear search through the volume to find the first page of
+    // the requested s-file.
+
+    lisafs_page page;
+    lisafs_pagelabel label;
+    FILE *output = NULL;
+
+    const lisafs_paddr pcount = mddf->lastfspage;
+    for (lisafs_paddr i = 0; i < pcount; i++) {
+        int read_err = lisafs_image_read_page(image, i, page, &label);
+        if (read_err == -1) goto error;
+
+        // If we found the first page, use its data to create the output
+        // file and then record where the next page is.
+
+        if ((label.fileid == fileid) && (label.bkwdlink == -1)) {
+            char sfname[32] = {0};
+            snprintf(sfname, 32, "sf.%hd", fileid);
+            output = fopen(sfname, "wb");
+            if (output == NULL) goto error;
+
+            size_t written = fwrite(page, label.dataused, 1, output);
+            if (written != 1) goto error;
+
+            break;
+        }
+    }
+
+    if (output != NULL) {
+        // Go through all the pages in order and write them to the output.
+
+        while (label.fwdlink != -1) {
+            int read_err = lisafs_image_read_page(image, label.fwdlink, page, &label);
+            if (read_err == -1) goto error;
+
+            size_t written = fwrite(page, label.dataused, 1, output);
+            if (written != 1) goto error;
+        }
+
+        fclose(output);
+        output = NULL;
+    } else {
+        fprintf(stderr, "%s: sfextract: file ID %d not found" "\n", program_name, fileid);
+    }
+
+    return EX_OK;
+
+error:
+    return EX_DATAERR;
 }
