@@ -25,6 +25,7 @@ lisafs_image *image = NULL;
 
 
 int lisafs_dumpblock(int argc, char **argv);
+int lisafs_dumppage(int argc, char **argv);
 int lisafs_fsinfo(int argc, char **argv);
 int lisafs_imageinfo(int argc, char **argv);
 
@@ -37,6 +38,7 @@ struct lisafs_command {
     const char * const description;
 } lisafs_commands[] = {
     { "dumpblock",  lisafs_dumpblock,   "dumpblock n" "\t- hex dump raw block n" },
+    { "dumppage",   lisafs_dumppage,    "dumppage n"  "\t- hex dump of raw page n" },
     { "fsinfo",     lisafs_fsinfo,      "fsinfo"      "\t- print filesystem info" },
     { "imageinfo",  lisafs_imageinfo,   "imageinfo"   "\t- print disk image info" },
     { NULL, NULL },
@@ -188,6 +190,55 @@ int lisafs_dumpblock(int argc, char **argv)
     for (int b = 0; b < 0x200; b += 16) {
         fprintf(stdout, "%04x:\t", b);
         print_hex_bytes_line(&block[b], 16);
+    }
+
+    return EX_OK;
+}
+
+
+int lisafs_dumppage(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "%s: dumppage: insufficient arguments" "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
+
+    int32_t n = atol(argv[1]);
+
+    // Read the page and its label.
+
+    lisafs_page page = {0};
+    lisafs_pagelabel label = { 0 };
+
+    int read_page_err = lisafs_image_read_page(image, n, page, &label);
+    if (read_page_err != 0) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error reading image '%s' block %d: %s" "\n", program_name, image_file_path, n, errstr);
+        print_usage();
+        return EX_DATAERR;
+    }
+
+    // Pretty-print the label.
+
+    fprintf(stdout, "Page:\t"       "%d"    "\n", n);
+    fprintf(stdout, "Label:"                "\n");
+    fprintf(stdout, "  version:\t"  "%hd"   "\n", label.version);
+    fprintf(stdout, "  flags:\t"    "0x%04hx" "\n", label.flags);
+    fprintf(stdout, "  fileid:\t"   "%hd"   "\n", label.fileid);
+    fprintf(stdout, "  dataused:\t" "%hd"   "\n", label.dataused);
+    fprintf(stdout, "  abspage:\t"  "%d"    "\n", label.abspage);
+    fprintf(stdout, "  relpage:\t"  "%d"    "\n", label.relpage);
+    fprintf(stdout, "  fwdlink:\t"  "%d"    "\n", label.fwdlink);
+    fprintf(stdout, "  bkwdlink:\t" "%d"    "\n", label.bkwdlink);
+
+    // Produce formatted hex output.
+
+    fprintf(stdout, "Data:" "\n");
+
+    for (int b = 0; b < 0x200; b += 16) {
+        fprintf(stdout, "%04x:\t", b);
+        print_hex_bytes_line(&page[b], 16);
     }
 
     return EX_OK;
