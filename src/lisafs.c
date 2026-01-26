@@ -17,10 +17,16 @@
 struct lisafs_image {
     image_dc42 *image;
     lisafs_mf_loader_loader_header header;
-    size_t block0;
     lisafs_mddf mddf;
+
+    // Cached from header
     char volname[33];
     char password[33];
+    lisafs_baddr block0;
+
+    // Cached from MDDF
+    lisafs_paddr slist_addr;
+    lisafs_paddr root_page;
 };
 
 
@@ -164,6 +170,9 @@ int lisafs_image_read_mddf(lisafs_image * _Nonnull image)
     memset(image->password, 0, 33);
     memcpy(image->password, &mddf->password[1], password_len);
 
+    image->slist_addr = mddf->slist_addr;
+    image->root_page = mddf->root_page;
+
     return 0;
 
 error:
@@ -248,7 +257,7 @@ const char * _Nonnull lisafs_image_get_password(lisafs_image * _Nonnull image)
 }
 
 int lisafs_image_read_block(lisafs_image * _Nonnull image,
-                            size_t n,
+                            lisafs_baddr n,
                             lisafs_block _Nonnull block,
                             lisafs_tag _Nonnull tag)
 {
@@ -258,13 +267,13 @@ int lisafs_image_read_block(lisafs_image * _Nonnull image,
 }
 
 int lisafs_image_read_page(lisafs_image * _Nonnull image,
-                           size_t n,
+                           lisafs_paddr n,
                            lisafs_page _Nonnull page,
                            lisafs_pagelabel * _Nonnull label)
 {
     assert(image->image != NULL);
 
-    size_t real_n = image->block0 + n;
+    lisafs_baddr real_n = image->block0 + n;
 
     lisafs_tag tag;
     int read_err = image_dc42_read_block(image->image, real_n, page, tag);

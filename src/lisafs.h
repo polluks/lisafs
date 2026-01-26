@@ -14,20 +14,32 @@
 
 // MARK: - Types and Structures
 
+typedef int8_t lisafs_byte;
 typedef int16_t lisafs_boolean;
 typedef int16_t lisafs_integer;
 typedef int32_t lisafs_longint;
 
-/*!
-    A Lisa timestamp in seconds since midnight on 1 January 1901.
- */
+
+/*! A Lisa timestamp in seconds since midnight on 1 January 1901. */
 typedef uint32_t lisafs_timestamp;
 
 /*! Convert a Lisa timestamp to a UNIX time_t. */
 LISAFS_EXTERN time_t lisafs_timestamp_to_time_t(lisafs_timestamp timestamp);
 
 
+/*! A Lisa filesystem block address is an absolute block number. */
+typedef int32_t lisafs_baddr;
+
+/*! A Lisa filesystem page address is a block number relative to the MDDF. */
+typedef int32_t lisafs_paddr;
+
+/*! A Lisa filesystem file ID is the index of an S-file. */
+typedef int16_t lisafs_fileid;
+
+/*! A raw Lisa filesystem tag. */
 typedef uint8_t lisafs_tag[24];
+
+/*! A raw Lisa fileystem block. */
 typedef uint8_t lisafs_block[512];
 
 
@@ -54,10 +66,10 @@ typedef struct lisafs_uid lisafs_uid;
 struct lisafs_pagelabel {
     lisafs_integer  version;
     lisafs_integer  flags;
-    lisafs_integer  fileid;
+    lisafs_fileid   fileid;
     lisafs_integer  dataused;
-    lisafs_longint  abspage;
-    lisafs_longint  relpage;
+    lisafs_baddr    abspage;
+    lisafs_paddr    relpage;
     lisafs_longint  fwdlink;
     lisafs_longint  bkwdlink;
 } LISAFS_PACKED;
@@ -135,24 +147,24 @@ struct lisafs_mddf {
     lisafs_timestamp        DT_copied;
     lisafs_timestamp        DT_scavenged;
     lisafs_longint          copy_thread;
-    lisafs_longint          firstblock;
-    lisafs_longint          lastblock;
-    lisafs_longint          lastfspage;
+    lisafs_baddr            firstblock;
+    lisafs_baddr            lastblock;
+    lisafs_paddr            lastfspage;
     lisafs_longint          blockcount;
     lisafs_integer          blocksize;
     lisafs_integer          datasize;
     lisafs_integer          cluster_size;
-    lisafs_longint          MDDFaddr;
+    lisafs_paddr            MDDFaddr;
     lisafs_integer          MDDFsize;
-    lisafs_longint          bitmap_addr;
+    lisafs_paddr            bitmap_addr;
     lisafs_longint          bitmap_size;
     lisafs_integer          bitmap_bytes;
     lisafs_integer          bitmap_pages;
-    lisafs_longint          slist_addr;         //!< Page where S-list starts
+    lisafs_paddr            slist_addr;         //!< Page where S-list starts
     lisafs_integer          slist_packing;      //!< S-list entries per block
     lisafs_integer          slist_block_count;  //!< Total S-list blocks
-    lisafs_integer          first_file;
-    lisafs_integer          empty_file;
+    lisafs_fileid           first_file;
+    lisafs_fileid           empty_file;
     lisafs_integer          maxfiles;
     lisafs_integer          hintsize;
     lisafs_integer          leader_offset;
@@ -165,7 +177,7 @@ struct lisafs_mddf {
     lisafs_longint          freestart;
     lisafs_longint          unusedl1;
     lisafs_longint          freecount;
-    lisafs_integer          rootsnum;
+    lisafs_fileid           rootsnum;
     lisafs_integer          rootmaxentries;
     lisafs_mountstate       mountinfo;
     lisafs_uid              overmount_stamp;
@@ -182,7 +194,7 @@ struct lisafs_mddf {
     lisafs_integer          boot_code;
     lisafs_integer          boot_environ;
     lisafs_longint          oem_id;
-    lisafs_longint          root_page;          //<! Root node of B-tree directory
+    lisafs_paddr            root_page;          //<! Root node of B-tree directory
     lisafs_integer          tree_depth;
     lisafs_integer          node_id;
     lisafs_integer          vol_seq_no;
@@ -203,8 +215,8 @@ typedef struct lisafs_mddf lisafs_mddf;
     A small file entry.
  */
 struct lisafs_s_entry {
-    lisafs_longint  hintaddr;
-    lisafs_longint  fileaddr;
+    lisafs_paddr    hintaddr;
+    lisafs_paddr    fileaddr;
     lisafs_longint  filesize;
     lisafs_integer  version;
 } LISAFS_PACKED;
@@ -257,9 +269,9 @@ typedef enum lisafs_entrytype lisafs_entrytype;
     Lisa file map entry.
  */
 struct lisafs_mapentry {
-    lisafs_longint  address;    //< absolute page of contiguous chunk
+    lisafs_baddr    address;    //< absolute page of contiguous chunk
     lisafs_integer  cpages;     //< number of pages in chunk
-};
+} LISAFS_PACKED;
 typedef struct lisafs_mapentry lisafs_mapentry;
 
 
@@ -271,8 +283,7 @@ struct lisafs_filemap {
     lisafs_integer  max_entries;    //< max count of mapentry in this map
     lisafs_integer  ecount;         //< count of mapentry in this map
     lisafs_mapentry map[84];        //< the map itself
-
-};
+} LISAFS_PACKED;
 typedef struct lisafs_filemap lisafs_filemap;
 
 
@@ -284,7 +295,7 @@ struct lisafs_smallmap {
     lisafs_integer  max_entries;    //< max count of mapentry in this map
     lisafs_integer  ecount;         //< count of mapentry in this map
     lisafs_mapentry map[10];        //< the small map itself
-};
+} LISAFS_PACKED;
 typedef struct lisafs_smallmap lisafs_smallmap;
 
 /*!
@@ -331,7 +342,7 @@ const char * _Nonnull lisafs_image_get_password(lisafs_image * _Nonnull image);
     given open Lisa disk image.
  */
 int lisafs_image_read_block(lisafs_image * _Nonnull image,
-                            size_t n,
+                            lisafs_baddr n,
                             lisafs_block _Nonnull block,
                             lisafs_tag _Nonnull tag);
 
@@ -341,7 +352,7 @@ int lisafs_image_read_block(lisafs_image * _Nonnull image,
     header, since page 0 almost certainly isn't physical block 0.
  */
 int lisafs_image_read_page(lisafs_image * _Nonnull image,
-                           size_t n,
+                           lisafs_paddr n,
                            lisafs_page _Nonnull page,
                            lisafs_pagelabel * _Nonnull label);
 
