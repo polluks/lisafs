@@ -211,9 +211,8 @@ int lisafs_dumppage(int argc, char **argv)
     // Read the page and its label.
 
     lisafs_page page = {0};
-    lisafs_pagelabel label = { 0 };
 
-    int read_page_err = lisafs_image_read_page(image, n, page, &label);
+    int read_page_err = lisafs_image_read_page(image, n, &page);
     if (read_page_err != 0) {
         const char *errstr = strerror(errno);
         fprintf(stderr, "%s: error reading image '%s' block %d: %s" "\n", program_name, image_file_path, n, errstr);
@@ -225,22 +224,22 @@ int lisafs_dumppage(int argc, char **argv)
 
     fprintf(stdout, "Page:\t"       "%d"    "\n", n);
     fprintf(stdout, "Label:"                "\n");
-    fprintf(stdout, "  version:\t"  "%hd"   "\n", label.version);
-    fprintf(stdout, "  flags:\t"    "0x%04hx" "\n", label.flags);
-    fprintf(stdout, "  fileid:\t"   "%hd"   "\n", label.fileid);
-    fprintf(stdout, "  dataused:\t" "%hd"   "\n", label.dataused);
-    fprintf(stdout, "  abspage:\t"  "%d"    "\n", label.abspage);
-    fprintf(stdout, "  relpage:\t"  "%d"    "\n", label.relpage);
-    fprintf(stdout, "  fwdlink:\t"  "%d"    "\n", label.fwdlink);
-    fprintf(stdout, "  bkwdlink:\t" "%d"    "\n", label.bkwdlink);
+    fprintf(stdout, "  version:\t"  "%hd"   "\n", page.label.version);
+    fprintf(stdout, "  flags:\t"    "0x%04hx" "\n", page.label.flags);
+    fprintf(stdout, "  fileid:\t"   "%hd"   "\n", page.label.fileid);
+    fprintf(stdout, "  dataused:\t" "%hd"   "\n", page.label.dataused);
+    fprintf(stdout, "  abspage:\t"  "%d"    "\n", page.label.abspage);
+    fprintf(stdout, "  relpage:\t"  "%d"    "\n", page.label.relpage);
+    fprintf(stdout, "  fwdlink:\t"  "%d"    "\n", page.label.fwdlink);
+    fprintf(stdout, "  bkwdlink:\t" "%d"    "\n", page.label.bkwdlink);
 
     // Produce formatted hex output.
 
     fprintf(stdout, "Data:" "\n");
 
-    for (int b = 0; b < 0x200; b += 16) {
+    for (int b = 0; b < 512; b += 16) {
         fprintf(stdout, "%04x:\t", b);
-        print_hex_bytes_line(&page[b], 16);
+        print_hex_bytes_line(&page.data[b], 16);
     }
 
     return EX_OK;
@@ -403,24 +402,23 @@ int lisafs_sfextract(int argc, char **argv)
     // the requested s-file.
 
     lisafs_page page;
-    lisafs_pagelabel label;
     FILE *output = NULL;
 
     const lisafs_paddr pcount = mddf->lastfspage;
     for (lisafs_paddr i = 0; i < pcount; i++) {
-        int read_err = lisafs_image_read_page(image, i, page, &label);
+        int read_err = lisafs_image_read_page(image, i, &page);
         if (read_err == -1) goto error;
 
         // If we found the first page, use its data to create the output
         // file and then record where the next page is.
 
-        if ((label.fileid == fileid) && (label.bkwdlink == -1)) {
+        if ((page.label.fileid == fileid) && (page.label.bkwdlink == -1)) {
             char sfname[32] = {0};
             snprintf(sfname, 32, "sf.%hd", fileid);
             output = fopen(sfname, "wb");
             if (output == NULL) goto error;
 
-            size_t written = fwrite(page, label.dataused, 1, output);
+            size_t written = fwrite(page.data, page.label.dataused, 1, output);
             if (written != 1) goto error;
 
             break;
@@ -430,11 +428,11 @@ int lisafs_sfextract(int argc, char **argv)
     if (output != NULL) {
         // Go through all the pages in order and write them to the output.
 
-        while (label.fwdlink != -1) {
-            int read_err = lisafs_image_read_page(image, label.fwdlink, page, &label);
+        while (page.label.fwdlink != -1) {
+            int read_err = lisafs_image_read_page(image, page.label.fwdlink, &page);
             if (read_err == -1) goto error;
 
-            size_t written = fwrite(page, label.dataused, 1, output);
+            size_t written = fwrite(page.data, page.label.dataused, 1, output);
             if (written != 1) goto error;
         }
 

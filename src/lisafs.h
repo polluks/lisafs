@@ -15,6 +15,7 @@
 // MARK: - Types and Structures
 
 typedef int8_t lisafs_byte;
+typedef int8_t lisafs_boolean1;
 typedef int16_t lisafs_boolean;
 typedef int16_t lisafs_integer;
 typedef int32_t lisafs_longint;
@@ -35,6 +36,9 @@ typedef int32_t lisafs_paddr;
 
 /*! A Lisa filesystem file ID is the index of an S-file. */
 typedef int16_t lisafs_fileid;
+
+/*! A B-Tree node ID. */
+typedef int16_t lisafs_nodeid;
 
 /*! A raw Lisa filesystem tag. */
 typedef uint8_t lisafs_tag[24];
@@ -78,7 +82,17 @@ typedef struct lisafs_pagelabel lisafs_pagelabel;
 #define LISAFS_REDLIGHT     -1      //!< link terminator in page label
 
 /*! The data portion of a page on a Lisa device. */
-typedef uint8_t lisafs_page[512];
+typedef uint8_t lisafs_pagedata[512];
+
+
+/*!
+    A complete Lisa page.
+ */
+struct lisafs_page {
+    lisafs_pagedata     data;
+    lisafs_pagelabel    label;
+};
+typedef struct lisafs_page lisafs_page;
 
 
 /*!
@@ -226,7 +240,7 @@ typedef struct lisafs_s_entry lisafs_s_entry;
 /*!
     Lisa file types.
  */
-enum lisafs_filetype {
+enum lisafs_filetype: int8_t {
     undefined,
     MDDFfile,
     rootcat,
@@ -247,23 +261,53 @@ enum lisafs_filetype {
 };
 typedef enum lisafs_filetype lisafs_filetype;
 
+const char * _Nullable lisafs_filetype_string(lisafs_filetype t);
+
+
+/*! Lisa build control record. */
+struct lisafs_build_control {
+    lisafs_integer  release_number;         //!< public release number
+    lisafs_integer  build_number;           //!< internal build membership
+    lisafs_integer  compatibility_level;    //!< local compatibility level
+    lisafs_integer  revision_level;         //!< iteration of file
+} LISAFS_PACKED;
+typedef struct lisafs_build_control lisafs_build_control;
 
 /*!
-    Lisa entry types.
+    Lisa file hint entry.
  */
-enum lisafs_entrytype {
-    emptyentry,
-    direntry,
-    linkentry,
-    fileentry,
-    pipeentry,
-    ecentry,
-    killedentry,
-    removed,
-    threadentry,
-};
-typedef enum lisafs_entrytype lisafs_entrytype;
-
+struct lisafs_hentry {
+    char                name[33];
+    char                name_pad;
+    lisafs_uid          UID;
+    lisafs_integer      version;
+    lisafs_filetype     ftype;
+    int8_t              ftype_pad;
+    lisafs_timestamp    date_created;
+    lisafs_timestamp    date_accessed;
+    lisafs_timestamp    date_modified;
+    lisafs_timestamp    date_backup;
+    lisafs_timestamp    date_scavenged;
+    lisafs_longint      machine_id;
+    lisafs_boolean1     killed;
+    lisafs_boolean1     safety_on;
+    lisafs_boolean1     protected;
+    lisafs_boolean1     master;
+    lisafs_boolean1     close_by_OS;
+    lisafs_boolean1     file_open;
+    lisafs_integer      result_scavenge;
+    lisafs_integer      unusedi1;
+    lisafs_integer      system_type;
+    lisafs_integer      user_type;
+    lisafs_integer      user_subtype;
+    lisafs_build_control    build_info;
+    lisafs_integer      file_portion;       //!< portion of large file split across media
+    char                password[9];
+    char                password_pad[3];
+    lisafs_nodeid       parentID;
+    lisafs_integer      fsOverhead;
+} LISAFS_PACKED;
+typedef struct lisafs_hentry lisafs_hentry;
 
 /*!
     Lisa file map entry.
@@ -297,6 +341,110 @@ struct lisafs_smallmap {
     lisafs_mapentry map[10];        //< the small map itself
 } LISAFS_PACKED;
 typedef struct lisafs_smallmap lisafs_smallmap;
+
+
+/*!
+    A B-Tree key.
+
+    - WARNING: This must be packed to be stored in 36 bytes.
+ */
+struct lisafs_key {
+	lisafs_byte key_length;
+	lisafs_integer parent_id;
+	char name[33];
+} LISAFS_PACKED;
+typedef struct lisafs_key lisafs_key;
+
+/*! Type of a B-Tree entry. */
+enum lisafs_entrytype: int8_t {
+    emptyentry = 0,
+    direntry = 1,
+    linkentry = 2,
+    fileentry = 3,
+    pipeentry = 4,
+    ecentry = 5,
+    killedentry = 6,
+    removed = 7,
+    threadentry = 8,
+};
+typedef enum lisafs_entrytype lisafs_entrytype;
+
+/*! A Lisa B-Tree entry header. */
+struct lisafs_btentryheader {
+    lisafs_key key;
+    lisafs_entrytype etype;
+    lisafs_byte etype_pad;
+} LISAFS_PACKED;
+typedef struct lisafs_btentryheader lisafs_btentryheader;
+
+/*! A Lisa B-Tree entry representing a filesystem object. */
+struct lisafs_objectrec {
+    lisafs_btentryheader header;
+    lisafs_fileid sfile;
+    lisafs_timestamp fileDTC;
+    lisafs_timestamp fileDTM;
+    lisafs_longint size;
+    lisafs_longint physSize;
+    lisafs_integer fsOvrhd;
+    lisafs_integer flags;
+    lisafs_longint unused;
+} LISAFS_PACKED;
+typedef struct lisafs_objectrec lisafs_objectrec;
+
+/*! A Lisa B-Tree entry representing a filesystem directory. */
+struct lisafs_directrec {
+    lisafs_btentryheader header;
+    lisafs_nodeid nodeid;
+    lisafs_timestamp DtCreat;
+    lisafs_longint unused;
+} LISAFS_PACKED;
+typedef struct lisafs_directrec lisafs_directrec;
+
+/*! A Lisa B-Tree thread entry. */
+struct lisafs_threadrec {
+    lisafs_btentryheader header;
+    lisafs_nodeid parID;
+    char myName[33];
+    char myName_pad;
+    lisafs_longint unused;
+} LISAFS_PACKED;
+typedef struct lisafs_threadrec lisafs_threadrec;
+
+/*! Types of B-tree nodes. */
+enum lisafs_nodekind: int8_t {
+    leaf = 0,
+    nonleaf = 1,
+};
+typedef enum lisafs_nodekind lisafs_nodekind;
+
+/*!
+    A Lisa B-Tree node descriptor, stored in the last 12 bytes of a2 KB page.
+*/
+struct lisafs_nodedesc {
+    lisafs_integer nkeys;
+    lisafs_longint prior;
+    lisafs_longint next;
+    lisafs_nodekind kind;
+    lisafs_byte cksum;
+} LISAFS_PACKED;
+typedef struct lisafs_nodedesc lisafs_nodedesc;
+
+/*! A runtime representation of a Lisa directory entry. */
+union lisafs_directory_entry {
+    lisafs_btentryheader header_only;
+    lisafs_objectrec object;
+    lisafs_directrec directory;
+    lisafs_threadrec thread;
+};
+typedef union lisafs_directory_entry lisafs_directory_entry;
+
+/*! A runtime representation of a Lisa directory. */
+struct lisafs_directory {
+    lisafs_directory_entry * _Nullable entries;
+    lisafs_integer count;
+};
+typedef struct lisafs_directory lisafs_directory;
+
 
 /*!
     A Lisa filesystem image. The contents are private.
@@ -353,7 +501,30 @@ int lisafs_image_read_block(lisafs_image * _Nonnull image,
  */
 int lisafs_image_read_page(lisafs_image * _Nonnull image,
                            lisafs_paddr n,
-                           lisafs_page _Nonnull page,
-                           lisafs_pagelabel * _Nonnull label);
+                           lisafs_page * _Nonnull page);
+
+/*!
+    Read the file hints for the given S-file.
+
+    - WARNING: This cannot read hints for special S-files (those with a
+               file ID less than LISAFS_FIRSTUSER_SF), since they have
+               no hints.
+ */
+int lisafs_image_read_sfile_hints(lisafs_image * _Nonnull image,
+                                  lisafs_fileid file,
+                                  lisafs_hentry * _Nonnull hints);
+
+/*!
+    Read a specified quantity of data from the S-file with the given
+    file ID into the given buffer.
+
+    - WARNING: This cannot read special S-files (those with a file ID
+               less than LISAFS_FIRSTUSER_SF); those should be read
+               page-by-page if necessary.
+ */
+int lisafs_image_read_sfile(lisafs_image * _Nonnull image,
+                            lisafs_fileid file,
+                            void * _Nonnull buf,
+                            size_t buf_size);
 
 #endif /* __LISAFS__H__ */
