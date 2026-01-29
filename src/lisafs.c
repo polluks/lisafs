@@ -541,7 +541,23 @@ error:
     return -1;
 }
 
-/*! Get the file hints for the given sfile. */
+lisafs_longint lisafs_image_get_sfile_size(lisafs_image * _Nonnull image,
+                                           lisafs_fileid file)
+{
+    assert(image->image != NULL);
+
+    // Find the info for the sfile.
+
+    lisafs_s_entry entry;
+    int entry_err = lisafs_image_get_sfile_info(image, file, &entry);
+    if (entry_err == -1) goto error;
+
+    return entry.filesize;
+
+error:
+    return -1;
+}
+
 int lisafs_image_read_sfile_hints(lisafs_image * _Nonnull image,
                                   lisafs_fileid file,
                                   lisafs_hentry * _Nonnull hints)

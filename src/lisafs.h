@@ -504,6 +504,12 @@ int lisafs_image_read_page(lisafs_image * _Nonnull image,
                            lisafs_page * _Nonnull page);
 
 /*!
+    Get the size of the given S-file.
+ */
+lisafs_longint lisafs_image_get_sfile_size(lisafs_image * _Nonnull image,
+                                           lisafs_fileid file);
+
+/*!
     Read the file hints for the given S-file.
 
     - WARNING: This cannot read hints for special S-files (those with a
