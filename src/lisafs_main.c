@@ -24,14 +24,14 @@ const char *command_name = NULL;
 lisafs_image *image = NULL;
 
 
+typedef int (*lisafs_command_func)(int argc, char **argv);
+
 int lisafs_dumpblock(int argc, char **argv);
 int lisafs_dumppage(int argc, char **argv);
 int lisafs_fsinfo(int argc, char **argv);
 int lisafs_imageinfo(int argc, char **argv);
 int lisafs_sfextract(int argc, char **argv);
-
-
-typedef int (*lisafs_command_func)(int argc, char **argv);
+int lisafs_sflist(int argc, char **argv);
 
 struct lisafs_command {
     const char * const name;
@@ -42,7 +42,8 @@ struct lisafs_command {
     { "dumppage",   lisafs_dumppage,    "dumppage n"  "\t- hex dump of raw page n" },
     { "fsinfo",     lisafs_fsinfo,      "fsinfo"      "\t- print filesystem info" },
     { "imageinfo",  lisafs_imageinfo,   "imageinfo"   "\t- print disk image info" },
-    { "sfextract",  lisafs_sfextract,   "sfextrct n"  "\t- extract sfile n (using labels)" },
+    { "sfextract",  lisafs_sfextract,   "sfextract n" "\t- extract sfile n (using labels)" },
+    { "sflist",     lisafs_sflist,      "sflist [-l]" "\t- list sfiles (using hints)", },
     { NULL, NULL },
 };
 
@@ -97,7 +98,7 @@ int main(int argc, char **argv)
     }
 
     if (command == NULL) {
-        fprintf(stderr, "%s: Unknown command '%s" "\n", program_name, command_name);
+        fprintf(stderr, "%s: Unknown command '%s'" "\n", program_name, command_name);
         print_usage();
         return EX_USAGE;
     }
@@ -258,6 +259,12 @@ const char * timestr(lisafs_timestamp timestamp)
     char *newline = strchr(buf, '\n');
     if (newline) *newline = '\0';
     return buf;
+}
+
+const char *boolstr(lisafs_boolean b)
+{
+    if (b) return "TRUE";
+    else return "FALSE";
 }
 
 #define OFFSET(a,b) ((void *)&(a->b) - (void *)a)
@@ -440,6 +447,78 @@ int lisafs_sfextract(int argc, char **argv)
         output = NULL;
     } else {
         fprintf(stderr, "%s: sfextract: file ID %d not found" "\n", program_name, fileid);
+    }
+
+    return EX_OK;
+
+error:
+    return EX_DATAERR;
+}
+
+
+int lisafs_sflist(int argc, char **argv)
+{
+    lisafs_mddf *mddf = lisafs_image_get_mddf(image);
+    assert(mddf != NULL);
+
+    bool detailed = false;
+    if (argc > 1) {
+        if (strncmp(argv[1], "-l", 2) == 0) detailed = true;
+    }
+
+    // Dump each S-file hint, in file ID order.
+
+    for (int i = LISAFS_FIRSTUSER_SF; i < mddf->empty_file; i++) {
+        lisafs_hentry hentry;
+        int hentry_err = lisafs_image_read_sfile_hints(image, i, &hentry);
+        if (hentry_err == -1) goto error;
+
+        char name[33];
+        memset(name, 0, 33);
+        memcpy(name, &hentry.name[1], hentry.name[0]);
+
+        if (detailed) {
+            char password[9];
+            memset(password, 0, 9);
+            memcpy(password, &hentry.password[1], hentry.password[0]);
+
+            fprintf(stdout, "S-file:\t"     "%hd"   "\n", i);
+            fprintf(stdout, "name:\t"       "'%s'"  "\n", name);
+            // skip name_pad
+            fprintf(stdout, "UID:\t\t"      "0x%08x:%08x" "\n", hentry.UID.a, hentry.UID.b);
+            fprintf(stdout, "version:\t"    "%hd"   "\n", hentry.version);
+            fprintf(stdout, "type:\t\t"     "%s"    "\n", lisafs_filetype_string(hentry.ftype));
+            fprintf(stdout, "created:\t"    "%s"    "\n", timestr(hentry.date_created));
+            fprintf(stdout, "accessed:\t"   "%s"    "\n", timestr(hentry.date_accessed));
+            fprintf(stdout, "modified:\t"   "%s"    "\n", timestr(hentry.date_modified));
+            fprintf(stdout, "backed up:\t"  "%s"    "\n", timestr(hentry.date_backup));
+            fprintf(stdout, "scavenged:\t"  "%s"    "\n", timestr(hentry.date_scavenged));
+            fprintf(stdout, "machine ID:\t" "%d"    "\n", hentry.machine_id);
+            fprintf(stdout, "killed:\t\t"   "%s"    "\n", boolstr(hentry.killed));
+            fprintf(stdout, "safety:\t\t"   "%s"    "\n", boolstr(hentry.safety_on));
+            fprintf(stdout, "protected:\t"  "%s"    "\n", boolstr(hentry.protected));
+            fprintf(stdout, "master:\t\t"   "%s"    "\n", boolstr(hentry.master));
+            fprintf(stdout, "OS-close:\t"   "%s"    "\n", boolstr(hentry.close_by_OS));
+            fprintf(stdout, "open:\t\t"     "%s"    "\n", boolstr(hentry.file_open));
+            fprintf(stdout, "scav result:\t""%hd"   "\n", hentry.result_scavenge);
+            // skip unusedi1
+            fprintf(stdout, "system type:\t""%hd"   "\n", hentry.system_type);
+            fprintf(stdout, "user type:\t"  "%hd"   "\n", hentry.user_type);
+            fprintf(stdout, "& subtype:\t"  "%hd"   "\n", hentry.user_subtype);
+            fprintf(stdout, "bi.release:\t" "%hd"   "\n", hentry.build_info.release_number);
+            fprintf(stdout, "bi.build:\t"   "%hd"   "\n", hentry.build_info.build_number);
+            fprintf(stdout, "bi.compat:\t"  "%hd"   "\n", hentry.build_info.compatibility_level);
+            fprintf(stdout, "bi.revision:\t""%hd"   "\n", hentry.build_info.revision_level);
+            fprintf(stdout, "file part:\t"  "%hd"   "\n", hentry.file_portion);
+            fprintf(stdout, "password:\t"   "'%s'"  "\n", password);
+            // skip password-pad
+            fprintf(stdout, "parent ID:\t"  "%hd"   "\n", hentry.parentID);
+            fprintf(stdout, "FS overhead:\t""%hd"   "\n", hentry.fsOverhead);
+
+            fprintf(stdout, "\n");
+        } else {
+            fprintf(stdout, "%d:\t'%s'" "\n", i, name);
+        }
     }
 
     return EX_OK;
