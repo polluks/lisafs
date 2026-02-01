@@ -788,6 +788,7 @@ int lisafs_read_sfile(lisafs_image * _Nonnull image,
     // contents into the buffer given to us by the user.
 
     void *current = buf;
+    int current_block = 0;
     size_t remaining = buf_size;
 
     for (int i = 0; i < map_count; i++) {
@@ -795,12 +796,15 @@ int lisafs_read_sfile(lisafs_image * _Nonnull image,
         lisafs_page page;
 
         for (int j = 0; j < entry->cpages; j++) {
-            int read_err = lisafs_read_page(image, entry->address, &page);
+            int read_err = lisafs_read_page(image, entry->address + j, &page);
             if (read_err == -1) goto error;
 
             size_t to_copy = remaining > 512 ? 512 : remaining;
             memcpy(current, page.data, to_copy);
             remaining -= to_copy;
+
+            current_block++;
+            current = &buf[current_block * 512];
         }
     }
 
