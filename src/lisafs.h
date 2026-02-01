@@ -1,7 +1,8 @@
 //  lisafs.h
 //	Part of LisaFilesystem.
 //
-//	Copyright © 2026 Base Hit Ventures, LLC. All rights reserved.
+//	Copyright © 2026 Christopher M. Hanson. All rights reserved.
+//  See file COPYING for details.
 
 #ifndef __LISAFS__H__
 #define __LISAFS__H__
@@ -102,14 +103,14 @@ typedef struct lisafs_page lisafs_page;
     to its first word to boot from it.
  */
 struct lisafs_mf_loader_loader_header {
-    lisafs_longint  jmp;            //< JMP instruction to skip header
-    lisafs_integer  boot_id;        //< should be 0xAAAA
-    lisafs_integer  ldr_version;    //< should be 0x0850
-    lisafs_integer  globalsize;     //< amount of global data for loader
-    lisafs_integer  codesize;       //< size of the loader
-    lisafs_integer  pc_offset;      //< offset from loader base to main entry
-    lisafs_integer  fs_block0;      //< block address of MDDF
-} LISFS_PACKED;
+    lisafs_longint  jmp;            //!< JMP instruction to skip header
+    lisafs_integer  boot_id;        //!< should be 0xAAAA
+    lisafs_integer  ldr_version;    //!< should be 0x0850
+    lisafs_integer  globalsize;     //!< amount of global data for loader
+    lisafs_integer  codesize;       //!< size of the loader
+    lisafs_integer  pc_offset;      //!< offset from loader base to main entry
+    lisafs_integer  fs_block0;      //!< block address of MDDF
+} LISAFS_PACKED;
 typedef struct lisafs_mf_loader_loader_header lisafs_mf_loader_loader_header;
 
 
@@ -208,7 +209,7 @@ struct lisafs_mddf {
     lisafs_integer          boot_code;
     lisafs_integer          boot_environ;
     lisafs_longint          oem_id;
-    lisafs_paddr            root_page;          //<! Root node of B-tree directory
+    lisafs_paddr            root_page;          //!< Root node of B-tree directory
     lisafs_integer          tree_depth;
     lisafs_integer          node_id;
     lisafs_integer          vol_seq_no;
@@ -313,8 +314,8 @@ typedef struct lisafs_hentry lisafs_hentry;
     Lisa file map entry.
  */
 struct lisafs_mapentry {
-    lisafs_baddr    address;    //< absolute page of contiguous chunk
-    lisafs_integer  cpages;     //< number of pages in chunk
+    lisafs_baddr    address;        //!< absolute page of contiguous chunk
+    lisafs_integer  cpages;         //!< number of pages in chunk
 } LISAFS_PACKED;
 typedef struct lisafs_mapentry lisafs_mapentry;
 
@@ -323,10 +324,10 @@ typedef struct lisafs_mapentry lisafs_mapentry;
     Lisa file map.
  */
 struct lisafs_filemap {
-    lisafs_longint  size;           //< number of blocks in this s-file
-    lisafs_integer  max_entries;    //< max count of mapentry in this map
-    lisafs_integer  ecount;         //< count of mapentry in this map
-    lisafs_mapentry map[84];        //< the map itself
+    lisafs_longint  size;           //!< number of blocks in this s-file
+    lisafs_integer  max_entries;    //!< max count of mapentry in this map
+    lisafs_integer  ecount;         //!< count of mapentry in this map
+    lisafs_mapentry map[84];        //!< the map itself
 } LISAFS_PACKED;
 typedef struct lisafs_filemap lisafs_filemap;
 
@@ -335,10 +336,10 @@ typedef struct lisafs_filemap lisafs_filemap;
     Lisa small file map.
  */
 struct lisafs_smallmap {
-    lisafs_longint  size;           //< number of blocks in this s-file
-    lisafs_integer  max_entries;    //< max count of mapentry in this map
-    lisafs_integer  ecount;         //< count of mapentry in this map
-    lisafs_mapentry map[10];        //< the small map itself
+    lisafs_longint  size;           //!< number of blocks in this s-file
+    lisafs_integer  max_entries;    //!< max count of mapentry in this map
+    lisafs_integer  ecount;         //!< count of mapentry in this map
+    lisafs_mapentry map[10];        //!< the small map itself
 } LISAFS_PACKED;
 typedef struct lisafs_smallmap lisafs_smallmap;
 
@@ -449,7 +450,7 @@ typedef struct lisafs_directory lisafs_directory;
 /*!
     A Lisa filesystem image. The contents are private.
  */
-struct lisafs_image;
+//struct lisafs_image;
 typedef struct lisafs_image lisafs_image;
 
 
@@ -458,79 +459,79 @@ typedef struct lisafs_image lisafs_image;
 /*!
     Open and return the Lisa filesystem image at the given path.
  */
-lisafs_image * _Nullable lisafs_image_open(const char * _Nonnull const path);
+lisafs_image * _Nullable lisafs_open(const char * _Nonnull const path);
 
 /*!
     Close the given Lisa filesystem image.
  */
-int lisafs_image_close(lisafs_image * _Nullable image);
+int lisafs_close(lisafs_image * _Nullable image);
 
 /*!
     Get the raw disk image underlying this filesystem image.
  */
-void * _Nonnull lisafs_image_get_raw_image(lisafs_image * _Nonnull image);
+void * _Nonnull lisafs_get_raw_image(lisafs_image * _Nonnull image);
 
 /*!
     Get the loader header for the given filesystem image. The type of
     structure returned will depend on the specific type of disk, e.g.
     microfloppy versus ProFile/Widget.
  */
-void * _Nonnull lisafs_image_get_loader_header(lisafs_image * _Nonnull image);
+void * _Nonnull lisafs_get_loader_header(lisafs_image * _Nonnull image);
 
 /*!
     Get the media data description file for the given filesystem image.
  */
-lisafs_mddf * _Nonnull lisafs_image_get_mddf(lisafs_image * _Nonnull image);
+lisafs_mddf * _Nonnull lisafs_get_mddf(lisafs_image * _Nonnull image);
 
-const char * _Nonnull lisafs_image_get_volname(lisafs_image * _Nonnull image);
-const char * _Nonnull lisafs_image_get_password(lisafs_image * _Nonnull image);
+const char * _Nonnull lisafs_get_volname(lisafs_image * _Nonnull image);
+const char * _Nonnull lisafs_get_password(lisafs_image * _Nonnull image);
 
 /*!
     Read both the raw data and tag bytes of physical block n from the
     given open Lisa disk image.
  */
-int lisafs_image_read_block(lisafs_image * _Nonnull image,
-                            lisafs_baddr n,
-                            lisafs_block _Nonnull block,
-                            lisafs_tag _Nonnull tag);
+int lisafs_read_block(lisafs_image * _Nonnull image,
+                      lisafs_baddr n,
+                      lisafs_block _Nonnull block,
+                      lisafs_tag _Nonnull tag);
 
 /*!
     Read both the data and label of page n from the given Lisa disk
     image. This takes into account things like the disk (not image)
     header, since page 0 almost certainly isn't physical block 0.
  */
-int lisafs_image_read_page(lisafs_image * _Nonnull image,
-                           lisafs_paddr n,
-                           lisafs_page * _Nonnull page);
+int lisafs_read_page(lisafs_image * _Nonnull image,
+                     lisafs_paddr n,
+                     lisafs_page * _Nonnull page);
 
 /*!
     Get the size of the given S-file.
  */
-lisafs_longint lisafs_image_get_sfile_size(lisafs_image * _Nonnull image,
-                                           lisafs_fileid file);
+lisafs_longint lisafs_get_sfile_size(lisafs_image * _Nonnull image,
+                                     lisafs_fileid file);
 
 /*!
     Read the file hints for the given S-file.
 
     - WARNING: This cannot read hints for special S-files (those with a
-               file ID less than LISAFS_FIRSTUSER_SF), since they have
+               file ID less than `LISAFS_FIRSTUSER_SF`), since they have
                no hints.
  */
-int lisafs_image_read_sfile_hints(lisafs_image * _Nonnull image,
-                                  lisafs_fileid file,
-                                  lisafs_hentry * _Nonnull hints);
+int lisafs_read_sfile_hints(lisafs_image * _Nonnull image,
+                            lisafs_fileid file,
+                            lisafs_hentry * _Nonnull hints);
 
 /*!
     Read a specified quantity of data from the S-file with the given
     file ID into the given buffer.
 
     - WARNING: This cannot read special S-files (those with a file ID
-               less than LISAFS_FIRSTUSER_SF); those should be read
+               less than `LISAFS_FIRSTUSER_SF`); those should be read
                page-by-page if necessary.
  */
-int lisafs_image_read_sfile(lisafs_image * _Nonnull image,
-                            lisafs_fileid file,
-                            void * _Nonnull buf,
-                            size_t buf_size);
+int lisafs_read_sfile(lisafs_image * _Nonnull image,
+                      lisafs_fileid file,
+                      void * _Nonnull buf,
+                      size_t buf_size);
 
 #endif /* __LISAFS__H__ */

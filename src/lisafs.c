@@ -1,7 +1,8 @@
 //  lisafs.c
 //	Part of LisaFilesystem.
 //
-//	Copyright © 2026 Base Hit Ventures, LLC. All rights reserved.
+//	Copyright © 2026 Christopher M. Hanson. All rights reserved.
+//  See file COPYING for details.
 
 #include "lisafs.h"
 
@@ -72,7 +73,7 @@ const char * _Nullable lisafs_filetype_string(lisafs_filetype t)
 }
 
 
-int lisafs_image_read_header(lisafs_image * _Nonnull image)
+int lisafs_read_header(lisafs_image * _Nonnull image)
 {
     lisafs_block block0;
     lisafs_tag tag0;
@@ -113,7 +114,7 @@ const char * _Nonnull lisafs_fsversion_string(lisafs_fsversion version)
 }
 
 
-int lisafs_image_read_mddf(lisafs_image * _Nonnull image)
+int lisafs_read_mddf(lisafs_image * _Nonnull image)
 {
     lisafs_block mddf_block;
     lisafs_tag mddf_tag;
@@ -214,15 +215,15 @@ error:
 }
 
 
-int lisafs_image_cache_s_files(lisafs_image * _Nonnull image)
+int lisafs_cache_s_files(lisafs_image * _Nonnull image)
 {
-    lisafs_paddr s_files_start = image->mddf.slist_addr;
-    const size_t slist_block_count = image->mddf.slist_block_count;
+    const lisafs_paddr s_files_start = image->mddf.slist_addr;
+    const lisafs_integer slist_block_count = image->mddf.slist_block_count;
 
     // The s-list itself is cached rather than the blocks containing it.
 
-    const size_t slist_packing = image->mddf.slist_packing;
-    const size_t slist_max_entries = slist_packing * slist_block_count;
+    const lisafs_integer slist_packing = image->mddf.slist_packing;
+    const lisafs_integer slist_max_entries = slist_packing * slist_block_count;
     image->s_files = calloc(sizeof(lisafs_s_entry), slist_max_entries);
     if (image->s_files == NULL) {
         errno = ENOMEM;
@@ -232,15 +233,15 @@ int lisafs_image_cache_s_files(lisafs_image * _Nonnull image)
     // Go through each block, copying and converting all the s-list
     // entries that it contains.
 
-    for (int b = 0; b < slist_block_count; b++) {
+    for (int16_t b = 0; b < slist_block_count; b++) {
         lisafs_page page = {0};
 
-        int read_err = lisafs_image_read_page(image, s_files_start + b, &page);
+        int read_err = lisafs_read_page(image, s_files_start + b, &page);
         if (read_err == -1) goto error;
 
         lisafs_s_entry *slist_page_entries = (lisafs_s_entry *)page.data;
         for (int i = 0; i < slist_packing; i++) {
-            const int entry_idx = slist_packing * b + i;
+            int entry_idx = slist_packing * b + i;
             lisafs_s_entry *entry = &image->s_files[entry_idx];
             lisafs_s_entry *raw_entry = &slist_page_entries[i];
 
@@ -288,7 +289,7 @@ struct lisafs_btree_entry {
 typedef struct lisafs_btree_entry lisafs_btree_entry;
 
 
-int lisafs_image_cache_directory(lisafs_image * _Nonnull image)
+int lisafs_cache_directory(lisafs_image * _Nonnull image)
 {
     // Get the first two B-tree pages of the catalog file.
 
@@ -297,7 +298,7 @@ int lisafs_image_cache_directory(lisafs_image * _Nonnull image)
     lisafs_paddr paddr = image->mddf.root_page;
     for (int i = 0; i < 4; i++) {
         lisafs_page page;
-        int read_err = lisafs_image_read_page(image, paddr, &page);
+        int read_err = lisafs_read_page(image, paddr, &page);
         if (read_err == -1) goto error;
 
         memcpy(&btpage[i * 512], page.data, 512);
@@ -361,7 +362,7 @@ error:
 }
 
 
-lisafs_image * _Nullable lisafs_image_open(const char * _Nonnull const path)
+lisafs_image * _Nullable lisafs_open(const char * _Nonnull const path)
 {
     lisafs_image *image = calloc(sizeof(lisafs_image), 1);
     if (image == NULL) {
@@ -379,32 +380,32 @@ lisafs_image * _Nullable lisafs_image_open(const char * _Nonnull const path)
 
     // Read and validate the microfloppy loader header.
 
-    int header_err = lisafs_image_read_header(image);
+    int header_err = lisafs_read_header(image);
     if (header_err) goto error;
 
     // Read and validate the MDDF.
 
-    int mddf_err = lisafs_image_read_mddf(image);
+    int mddf_err = lisafs_read_mddf(image);
     if (mddf_err) goto error;
 
     // Read and validate the S-files.
 
-    int s_files_err = lisafs_image_cache_s_files(image);
+    int s_files_err = lisafs_cache_s_files(image);
     if (s_files_err) goto error;
 
     // Read and validate the directory (catalog B-Tree).
 
-    int directory_err = lisafs_image_cache_directory(image);
+    int directory_err = lisafs_cache_directory(image);
     if (directory_err) goto error;
 
     return image;
 
 error:
-    lisafs_image_close(image);
+    lisafs_close(image);
     return NULL;
 }
 
-int lisafs_image_close(lisafs_image * _Nullable image)
+int lisafs_close(lisafs_image * _Nullable image)
 {
     if (image == NULL) return 0;
 
@@ -423,46 +424,46 @@ int lisafs_image_close(lisafs_image * _Nullable image)
     return 0;
 }
 
-void * _Nonnull lisafs_image_get_raw_image(lisafs_image * _Nonnull image)
+void * _Nonnull lisafs_get_raw_image(lisafs_image * _Nonnull image)
 {
     assert(image->image != NULL);
 
     return image->image;
 }
 
-void * _Nonnull lisafs_image_get_loader_header(lisafs_image * _Nonnull image)
+void * _Nonnull lisafs_get_loader_header(lisafs_image * _Nonnull image)
 {
     return &image->header;
 }
 
-lisafs_mddf * _Nonnull lisafs_image_get_mddf(lisafs_image * _Nonnull image)
+lisafs_mddf * _Nonnull lisafs_get_mddf(lisafs_image * _Nonnull image)
 {
     return &image->mddf;
 }
 
-const char * _Nonnull lisafs_image_get_volname(lisafs_image * _Nonnull image)
+const char * _Nonnull lisafs_get_volname(lisafs_image * _Nonnull image)
 {
     return image->volname;
 }
 
-const char * _Nonnull lisafs_image_get_password(lisafs_image * _Nonnull image)
+const char * _Nonnull lisafs_get_password(lisafs_image * _Nonnull image)
 {
     return image->password;
 }
 
-int lisafs_image_read_block(lisafs_image * _Nonnull image,
-                            lisafs_baddr n,
-                            lisafs_block _Nonnull block,
-                            lisafs_tag _Nonnull tag)
+int lisafs_read_block(lisafs_image * _Nonnull image,
+                      lisafs_baddr n,
+                      lisafs_block _Nonnull block,
+                      lisafs_tag _Nonnull tag)
 {
     assert(image->image != NULL);
 
     return image_dc42_read_block(image->image, n, block, tag);
 }
 
-int lisafs_image_read_page(lisafs_image * _Nonnull image,
-                           lisafs_paddr n,
-                           lisafs_page * _Nonnull page)
+int lisafs_read_page(lisafs_image * _Nonnull image,
+                     lisafs_paddr n,
+                     lisafs_page * _Nonnull page)
 {
     assert(image->image != NULL);
 
@@ -518,9 +519,9 @@ int lisafs_image_read_page(lisafs_image * _Nonnull image,
     return 0;
 }
 
-int lisafs_image_get_sfile_info(lisafs_image * _Nonnull image,
-                                lisafs_fileid file,
-                                lisafs_s_entry * _Nonnull entry)
+int lisafs_get_sfile_info(lisafs_image * _Nonnull image,
+                          lisafs_fileid file,
+                          lisafs_s_entry * _Nonnull entry)
 {
     assert(image->image != NULL);
     assert(image->s_files != NULL);
@@ -541,15 +542,15 @@ error:
     return -1;
 }
 
-lisafs_longint lisafs_image_get_sfile_size(lisafs_image * _Nonnull image,
-                                           lisafs_fileid file)
+lisafs_longint lisafs_get_sfile_size(lisafs_image * _Nonnull image,
+                                     lisafs_fileid file)
 {
     assert(image->image != NULL);
 
     // Find the info for the sfile.
 
     lisafs_s_entry entry;
-    int entry_err = lisafs_image_get_sfile_info(image, file, &entry);
+    int entry_err = lisafs_get_sfile_info(image, file, &entry);
     if (entry_err == -1) goto error;
 
     return entry.filesize;
@@ -558,9 +559,9 @@ error:
     return -1;
 }
 
-int lisafs_image_read_sfile_hints(lisafs_image * _Nonnull image,
-                                  lisafs_fileid file,
-                                  lisafs_hentry * _Nonnull hints)
+int lisafs_read_sfile_hints(lisafs_image * _Nonnull image,
+                            lisafs_fileid file,
+                            lisafs_hentry * _Nonnull hints)
 {
     assert(image->image != NULL);
 
@@ -574,7 +575,7 @@ int lisafs_image_read_sfile_hints(lisafs_image * _Nonnull image,
     // Find the info for the sfile.
 
     lisafs_s_entry entry;
-    int entry_err = lisafs_image_get_sfile_info(image, file, &entry);
+    int entry_err = lisafs_get_sfile_info(image, file, &entry);
     if (entry_err == -1) goto error;
 
     // Every non-special sfile will have hints.
@@ -582,7 +583,7 @@ int lisafs_image_read_sfile_hints(lisafs_image * _Nonnull image,
     if (entry.hintaddr) {
         lisafs_page file_leader;
 
-        int hints_err = lisafs_image_read_page(image, entry.hintaddr, &file_leader);
+        int hints_err = lisafs_read_page(image, entry.hintaddr, &file_leader);
         if (hints_err == -1) goto error;
 
         lisafs_hentry *raw_hints = (lisafs_hentry *)&file_leader.data[image->mddf.hentry_offset];
@@ -633,7 +634,7 @@ error:
 }
 
 /*! Get the (complete) file map and its size for the given sfile. */
-lisafs_mapentry * _Nullable lisafs_image_copy_sfile_map(
+lisafs_mapentry * _Nullable lisafs_copy_sfile_map(
                                 lisafs_image * _Nonnull image,
                                 lisafs_fileid file,
                                 lisafs_integer * _Nonnull count)
@@ -651,7 +652,7 @@ lisafs_mapentry * _Nullable lisafs_image_copy_sfile_map(
     // Find the info for the S-file.
 
     lisafs_s_entry entry;
-    int entry_err = lisafs_image_get_sfile_info(image, file, &entry);
+    int entry_err = lisafs_get_sfile_info(image, file, &entry);
     if (entry_err == -1) goto error;
 
     // If this file has no hint address, it has no leader and therefore
@@ -681,13 +682,13 @@ lisafs_mapentry * _Nullable lisafs_image_copy_sfile_map(
 
     if (oldfs) {
         lisafs_page file_leader;
-        int leader0_err = lisafs_image_read_page(image, entry.hintaddr, &file_leader);
+        int leader0_err = lisafs_read_page(image, entry.hintaddr, &file_leader);
         if (leader0_err == -1) goto error;
 
         // Read the next page of file leader, if there is one.
 
         if (file_leader.label.fwdlink != -1) {
-            int leader1_err = lisafs_image_read_page(image, file_leader.label.fwdlink, &file_leader);
+            int leader1_err = lisafs_read_page(image, file_leader.label.fwdlink, &file_leader);
             if (leader1_err == -1) goto error;
         } else {
             // This file is broken, in that it has a file leader but no
@@ -723,7 +724,7 @@ lisafs_mapentry * _Nullable lisafs_image_copy_sfile_map(
         }
     } else {
         lisafs_page file_leader;
-        int leader_err = lisafs_image_read_page(image, entry.hintaddr, &file_leader);
+        int leader_err = lisafs_read_page(image, entry.hintaddr, &file_leader);
         if (leader_err == -1) goto error;
 
         lisafs_smallmap *raw_smallmap = (lisafs_smallmap *)&file_leader.data[image->mddf.smallmap_offset];
@@ -763,10 +764,10 @@ error:
 }
 
 
-int lisafs_image_read_sfile(lisafs_image * _Nonnull image,
-                            lisafs_fileid file,
-                            void * _Nonnull buf,
-                            size_t buf_size)
+int lisafs_read_sfile(lisafs_image * _Nonnull image,
+                      lisafs_fileid file,
+                      void * _Nonnull buf,
+                      size_t buf_size)
 {
     assert(image->image != NULL);
 
@@ -780,7 +781,7 @@ int lisafs_image_read_sfile(lisafs_image * _Nonnull image,
     }
 
     lisafs_integer map_count;
-    map = lisafs_image_copy_sfile_map(image, file, &map_count);
+    map = lisafs_copy_sfile_map(image, file, &map_count);
     if (map == NULL) goto error;
 
     // Traverse all of the entries in the file map, reading the file
@@ -794,7 +795,7 @@ int lisafs_image_read_sfile(lisafs_image * _Nonnull image,
         lisafs_page page;
 
         for (int j = 0; j < entry->cpages; j++) {
-            int read_err = lisafs_image_read_page(image, entry->address, &page);
+            int read_err = lisafs_read_page(image, entry->address, &page);
             if (read_err == -1) goto error;
 
             size_t to_copy = remaining > 512 ? 512 : remaining;

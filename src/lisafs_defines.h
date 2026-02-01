@@ -1,3 +1,9 @@
+//  lisafs_defines.h
+//  Part of LisaFilesystem.
+//
+//  Copyright © 2026 Christopher M. Hanson. All rights reserved.
+//  See file COPYING for details.
+
 #ifndef __LISAFS__DEFINES__H__
 #define __LISAFS__DEFINES__H__
 

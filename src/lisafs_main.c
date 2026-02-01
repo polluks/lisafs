@@ -1,7 +1,8 @@
 //  lisafs_main.c
 //	Part of LisaFilesystem.
 //
-//	Copyright © 2026 Base Hit Ventures, LLC. All rights reserved.
+//	Copyright © 2026 Christopher M. Hanson. All rights reserved.
+//  See file COPYING for details.
 
 #include <assert.h>
 #include <ctype.h>
@@ -107,7 +108,7 @@ int main(int argc, char **argv)
 
     // Attach the disk image.
 
-    image = lisafs_image_open(image_file_path);
+    image = lisafs_open(image_file_path);
     if (image == NULL) {
         const char *errstr = strerror(errno);
         fprintf(stderr, "%s: error opening image '%s': %s" "\n", program_name, image_file_path, errstr);
@@ -121,7 +122,7 @@ int main(int argc, char **argv)
 
     // Detach the disk image.
 
-    (void) lisafs_image_close(image);
+    (void) lisafs_close(image);
 
     return exitcode;
 }
@@ -168,27 +169,33 @@ int lisafs_dumpblock(int argc, char **argv)
         return EX_USAGE;
     }
 
-    int32_t n = atol(argv[1]);
+    long n = atol(argv[1]);
+    if ((n > INT32_MAX) || (n < INT32_MIN)) {
+        fprintf(stderr, "%s: dumpblock: invalid argument %ld outside 32-bit integer range" "\n",
+                program_name, n);
+        return EX_USAGE;
+    }
 
     // Read the block and its tag.
 
     uint8_t block[512] = {0};
     uint8_t tag[12] = {0};
 
-    int read_block_err = lisafs_image_read_block(image, n, block, tag);
+    int read_block_err = lisafs_read_block(image, (int32_t)n, block, tag);
     if (read_block_err != 0) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error reading image '%s' block %d: %s" "\n", program_name, image_file_path, n, errstr);
+        fprintf(stderr, "%s: error reading image '%s' block %ld: %s" "\n",
+                program_name, image_file_path, n, errstr);
         print_usage();
         return EX_DATAERR;
     }
 
     // Produce formatted hex output.
 
-    fprintf(stdout, "Block:\t%d" "\n", n);
+    fprintf(stdout, "Block:\t" "%ld" "\n", n);
     fprintf(stdout, "Tag:\t");
     print_hex_bytes_line(tag, 12);
-    fprintf(stdout, "Data:" "\n");
+    fprintf(stdout, "Data:"          "\n");
 
     for (int b = 0; b < 0x200; b += 16) {
         fprintf(stdout, "%04x:\t", b);
@@ -207,23 +214,29 @@ int lisafs_dumppage(int argc, char **argv)
         return EX_USAGE;
     }
 
-    int32_t n = atol(argv[1]);
+    long n = atol(argv[1]);
+    if ((n > INT32_MAX) || (n < INT32_MIN)) {
+        fprintf(stderr, "%s: dumppage: invalid argument %ld outside 32-bit integer range" "\n",
+                program_name, n);
+        return EX_USAGE;
+    }
 
     // Read the page and its label.
 
     lisafs_page page = {0};
 
-    int read_page_err = lisafs_image_read_page(image, n, &page);
+    int read_page_err = lisafs_read_page(image, (int32_t)n, &page);
     if (read_page_err != 0) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error reading image '%s' block %d: %s" "\n", program_name, image_file_path, n, errstr);
+        fprintf(stderr, "%s: error reading image '%s' block %ld: %s" "\n",
+                program_name, image_file_path, n, errstr);
         print_usage();
         return EX_DATAERR;
     }
 
     // Pretty-print the label.
 
-    fprintf(stdout, "Page:\t"       "%d"    "\n", n);
+    fprintf(stdout, "Page:\t"       "%ld"   "\n", n);
     fprintf(stdout, "Label:"                "\n");
     fprintf(stdout, "  version:\t"  "%hd"   "\n", page.label.version);
     fprintf(stdout, "  flags:\t"    "0x%04hx" "\n", page.label.flags);
@@ -273,7 +286,7 @@ const char *boolstr(lisafs_boolean b)
 
 int lisafs_fsinfo(int argc, char **argv)
 {
-    lisafs_mf_loader_loader_header *header = lisafs_image_get_loader_header(image);
+    lisafs_mf_loader_loader_header *header = lisafs_get_loader_header(image);
     assert(header != NULL);
 
     fprintf(stdout, "*** Loader Loader Header (block 0)" "\n");
@@ -286,15 +299,15 @@ int lisafs_fsinfo(int argc, char **argv)
     fprintf(stdout, "Block 0 Offset:\t" "%d (%td)"      "\n", header->fs_block0, OFFSET(header, fs_block0));
     fprintf(stdout, "\n");
 
-    lisafs_mddf *mddf = lisafs_image_get_mddf(image);
+    lisafs_mddf *mddf = lisafs_get_mddf(image);
     assert(mddf != NULL);
 
     fprintf(stdout, "*** Media Description Data File (block %d)" "\n", header->fs_block0);
     fprintf(stdout, "Version:\t\t"          "%s (%td)" "\n", lisafs_fsversion_string(mddf->fsversion), OFFSET(mddf, fsversion));
     fprintf(stdout, "Volume ID:\t\t"        "0x%08x:%08x (%td)""\n", mddf->volid.a, mddf->volid.b, OFFSET(mddf, volid));
     fprintf(stdout, "Volume Number:\t\t"    "0x%04hx (%td)" "\n", mddf->volnum, OFFSET(mddf, volnum));
-    fprintf(stdout, "Volume Name:\t\t"      "'%s' (%td)" "\n", lisafs_image_get_volname(image), OFFSET(mddf, volname));
-    fprintf(stdout, "Volume Password:\t"    "'%s' (%td)" "\n", lisafs_image_get_password(image), OFFSET(mddf, password));
+    fprintf(stdout, "Volume Name:\t\t"      "'%s' (%td)" "\n", lisafs_get_volname(image), OFFSET(mddf, volname));
+    fprintf(stdout, "Volume Password:\t"    "'%s' (%td)" "\n", lisafs_get_password(image), OFFSET(mddf, password));
     DEFPRINT(mddf, init_machine_id, "%d");
     DEFPRINT(mddf, master_machine_id, "%d");
     fprintf(stdout, "Date Created:\t\t"     "%s (%td)" "\n", timestr(mddf->DT_created), OFFSET(mddf, DT_created));
@@ -365,7 +378,7 @@ int lisafs_fsinfo(int argc, char **argv)
 
 int lisafs_imageinfo(int argc, char **argv)
 {
-    image_dc42 *raw_image = lisafs_image_get_raw_image(image);
+    image_dc42 *raw_image = lisafs_get_raw_image(image);
     assert(raw_image != NULL);
 
     image_dc42_header *header = image_dc42_get_header(raw_image);
@@ -404,22 +417,22 @@ int lisafs_sfextract(int argc, char **argv)
     }
     const lisafs_fileid fileid = input_fileid;
 
-    lisafs_mddf *mddf = lisafs_image_get_mddf(image);
+    lisafs_mddf *mddf = lisafs_get_mddf(image);
     assert(mddf != NULL);
 
     // Ask for the S-file hints and contents requested by the user.
 
     lisafs_hentry hints;
-    int read_hints = lisafs_image_read_sfile_hints(image, fileid, &hints);
+    int read_hints = lisafs_read_sfile_hints(image, fileid, &hints);
     if (read_hints == -1) goto error;
 
-    lisafs_longint size = lisafs_image_get_sfile_size(image, fileid);
+    lisafs_longint size = lisafs_get_sfile_size(image, fileid);
     if (size == -1) goto error;
 
     buf = calloc(size, 1);
     if (buf == NULL) goto error;
 
-    int read_file = lisafs_image_read_sfile(image, fileid, buf, size);
+    int read_file = lisafs_read_sfile(image, fileid, buf, size);
     if (read_file == -1) goto error;
 
     // Create the output file with the same name as the requested S-file,
@@ -458,7 +471,7 @@ error:
 
 int lisafs_sflist(int argc, char **argv)
 {
-    lisafs_mddf *mddf = lisafs_image_get_mddf(image);
+    lisafs_mddf *mddf = lisafs_get_mddf(image);
     assert(mddf != NULL);
 
     bool detailed = false;
@@ -470,7 +483,7 @@ int lisafs_sflist(int argc, char **argv)
 
     for (int i = LISAFS_FIRSTUSER_SF; i < mddf->empty_file; i++) {
         lisafs_hentry hentry;
-        int hentry_err = lisafs_image_read_sfile_hints(image, i, &hentry);
+        int hentry_err = lisafs_read_sfile_hints(image, i, &hentry);
         if (hentry_err == -1) goto error;
 
         char name[33];

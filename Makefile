@@ -1,7 +1,8 @@
 #	Makefile
 #	Part of LisaFilesystem.
 #
-#	Copyright © 2026 Base Hit Ventures, LLC. All rights reserved.
+#	Copyright © 2026 Christopher M. Hanson. All rights reserved.
+#   See file COPYING for details.
 
 .POSIX:
 
