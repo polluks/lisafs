@@ -271,7 +271,7 @@ int lisafs_cache_s_files(lisafs_image * _Nonnull image)
 
     image->s_files[LISAFS_ROOTDIR_SNUM].hintaddr = 0;
     image->s_files[LISAFS_ROOTDIR_SNUM].fileaddr = image->mddf.root_page;
-    image->s_files[LISAFS_ROOTDIR_SNUM].filesize = image->mddf.tree_depth * image->mddf.datasize * 4;
+    image->s_files[LISAFS_ROOTDIR_SNUM].filesize = ((1 << image->mddf.tree_depth) - 1) * (image->mddf.datasize * 4);
     image->s_files[LISAFS_ROOTDIR_SNUM].version = 0;
 
     return 0;
@@ -316,10 +316,10 @@ int lisafs_cache_directory(lisafs_image * _Nonnull image)
     root_node.kind  = raw_root_node->kind;
     root_node.cksum = raw_root_node->cksum;
 
-    fprintf(stdout, "nkeys:\t" "%hd" "\n", root_node.nkeys);
-    fprintf(stdout, "prior:\t" "%d"  "\n", root_node.prior);
-    fprintf(stdout, "next:\t"  "%d"  "\n", root_node.next);
-    fprintf(stdout, "kind:\t"  "%s"  "\n", ((root_node.kind == leaf) ? "leaf" : "nonleaf"));
+//    fprintf(stdout, "nkeys:\t" "%hd" "\n", root_node.nkeys);
+//    fprintf(stdout, "prior:\t" "%d"  "\n", root_node.prior);
+//    fprintf(stdout, "next:\t"  "%d"  "\n", root_node.next);
+//    fprintf(stdout, "kind:\t"  "%s"  "\n", ((root_node.kind == leaf) ? "leaf" : "nonleaf"));
 
     // Now go through its entries and compose the real tree.
 
@@ -329,7 +329,7 @@ int lisafs_cache_directory(lisafs_image * _Nonnull image)
         lisafs_paddr *raw_pg = (lisafs_paddr *)&btpage[0];
         pg = swap32(*raw_pg);
         offset = 4;
-        fprintf(stdout, "pg:\t" "%d" "\n", pg);
+//        fprintf(stdout, "pg:\t" "%d" "\n", pg);
     } else {
         pg = -1;
         offset = 0;
@@ -341,19 +341,19 @@ int lisafs_cache_directory(lisafs_image * _Nonnull image)
     entry.header_only.etype      =  raw_entry->header_only.etype;
     entry.header_only.etype_pad  =  raw_entry->header_only.etype_pad;
 
-    fprintf(stdout, "entry 0 type:\t");
-    switch (entry.header_only.etype) {
-        case emptyentry:  fprintf(stdout, "empty"); break;
-        case direntry:    fprintf(stdout, "directory"); break;
-        case linkentry:   fprintf(stdout, "link"); break;
-        case fileentry:   fprintf(stdout, "file"); break;
-        case pipeentry:   fprintf(stdout, "pipe"); break;
-        case ecentry:     fprintf(stdout, "ec"); break;
-        case killedentry: fprintf(stdout, "killed"); break;
-        case removed:     fprintf(stdout, "removed)"); break;
-        case threadentry: fprintf(stdout, "thread"); break;
-    }
-    fprintf(stdout, "\n");
+//    fprintf(stdout, "entry 0 type:\t");
+//    switch (entry.header_only.etype) {
+//        case emptyentry:  fprintf(stdout, "empty"); break;
+//        case direntry:    fprintf(stdout, "directory"); break;
+//        case linkentry:   fprintf(stdout, "link"); break;
+//        case fileentry:   fprintf(stdout, "file"); break;
+//        case pipeentry:   fprintf(stdout, "pipe"); break;
+//        case ecentry:     fprintf(stdout, "ec"); break;
+//        case killedentry: fprintf(stdout, "killed"); break;
+//        case removed:     fprintf(stdout, "removed)"); break;
+//        case threadentry: fprintf(stdout, "thread"); break;
+//    }
+//    fprintf(stdout, "\n");
 
     return 0;
 
