@@ -31,8 +31,10 @@ int lisafs_dumpblock(int argc, char **argv);
 int lisafs_dumppage(int argc, char **argv);
 int lisafs_fsinfo(int argc, char **argv);
 int lisafs_imageinfo(int argc, char **argv);
+int lisafs_list(int argc, char **argv);
 int lisafs_sfextract(int argc, char **argv);
 int lisafs_sflist(int argc, char **argv);
+
 
 struct lisafs_command {
     const char * const name;
@@ -43,6 +45,7 @@ struct lisafs_command {
     { "dumppage",   lisafs_dumppage,    "dumppage n"  "\t- hex dump of raw page n" },
     { "fsinfo",     lisafs_fsinfo,      "fsinfo"      "\t- print filesystem info" },
     { "imageinfo",  lisafs_imageinfo,   "imageinfo"   "\t- print disk image info" },
+    { "list",       lisafs_list,        "list"        "\t- list all files on the image" },
     { "sfextract",  lisafs_sfextract,   "sfextract n" "\t- extract sfile n (using hints)" },
     { "sflist",     lisafs_sflist,      "sflist [-l]" "\t- list sfiles (using hints)", },
     { NULL, NULL },
@@ -259,21 +262,6 @@ int lisafs_dumppage(int argc, char **argv)
     return EX_OK;
 }
 
-const char * timestr(lisafs_timestamp timestamp)
-{
-    static struct tm tm;
-    static char buf[26];
-
-    if (timestamp == 0) return "never";
-
-    time_t time = lisafs_timestamp_to_time_t(timestamp);
-    gmtime_r(&time, &tm);
-    asctime_r(&tm, buf);
-    char *newline = strchr(buf, '\n');
-    if (newline) *newline = '\0';
-    return buf;
-}
-
 const char *boolstr(lisafs_boolean b)
 {
     if (b) return "TRUE";
@@ -310,10 +298,10 @@ int lisafs_fsinfo(int argc, char **argv)
     fprintf(stdout, "Volume Password:\t"    "'%s' (%td)" "\n", lisafs_get_password(image), OFFSET(mddf, password));
     DEFPRINT(mddf, init_machine_id, "%d");
     DEFPRINT(mddf, master_machine_id, "%d");
-    fprintf(stdout, "Date Created:\t\t"     "%s (%td)" "\n", timestr(mddf->DT_created), OFFSET(mddf, DT_created));
-    fprintf(stdout, "Date Copy Created:\t"  "%s (%td)" "\n", timestr(mddf->DT_copy_created), OFFSET(mddf, DT_copy_created));
-    fprintf(stdout, "Date Copied:\t\t"      "%s (%td)" "\n", timestr(mddf->DT_copied), OFFSET(mddf, DT_copied));
-    fprintf(stdout, "Date Scavenged:\t\t"   "%s (%td)" "\n", timestr(mddf->DT_scavenged), OFFSET(mddf, DT_scavenged));
+    fprintf(stdout, "Date Created:\t\t"     "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_created), OFFSET(mddf, DT_created));
+    fprintf(stdout, "Date Copy Created:\t"  "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_copy_created), OFFSET(mddf, DT_copy_created));
+    fprintf(stdout, "Date Copied:\t\t"      "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_copied), OFFSET(mddf, DT_copied));
+    fprintf(stdout, "Date Scavenged:\t\t"   "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_scavenged), OFFSET(mddf, DT_scavenged));
     DEFPRINT(mddf, copy_thread, "%d");
     DEFPRINT(mddf, firstblock, "%d");
     DEFPRINT(mddf, lastblock, "%d");
@@ -394,6 +382,88 @@ int lisafs_imageinfo(int argc, char **argv)
     fprintf(stdout, "Encoding:\t"   "%s" "\n", image_dc42_get_encoding_name(header->encoding));
     fprintf(stdout, "Format:\t\t"   "0x%02x" "\n", header->format.gcr);
     fprintf(stdout, "Magic:\t\t"    "0x%04x" "\n", header->magic_number);
+
+    return EX_OK;
+}
+
+
+int lisafs_list_print_directory(lisafs_directrec * _Nonnull directory, void * _Nullable context)
+{
+    char dirname[33] = {0};
+    memcpy(dirname, directory->header.key.name, 32);
+
+    fprintf(stdout, "D %*s- %*hd" "\n",
+            -32, dirname,
+            5, directory->nodeID);
+
+    return 0;
+}
+
+int lisafs_list_print_object(lisafs_objectrec * _Nonnull object, void * _Nullable context)
+{
+    char objname[33] = {0};
+    memcpy(objname, object->header.key.name, 32);
+
+    char c;
+    switch (object->header.etype) {
+        case linkentry: c = 'L'; break;
+        case fileentry: c = 'F'; break;
+        case pipeentry: c = 'P'; break;
+        case ecentry:   c = 'E'; break;
+        default:        c = '?'; break;
+    }
+
+    fprintf(stdout, "%c %*s  %*hd %*d" "\n", c,
+            -32, objname,
+            5, object->sfile,
+            10, object->size);
+
+    return 0;
+}
+
+int lisafs_list_print_thread(lisafs_threadrec * _Nonnull thread, void * _Nullable context)
+{
+    char threadname[33] = {0};
+    memcpy(threadname, &thread->myName[1], thread->myName[0]);
+
+    if (threadname[0] == 0) {
+        threadname[0] = '-';
+        threadname[1] = '\0';
+    }
+
+    fprintf(stdout, "%s:" "\n", threadname);
+
+    return 0;
+}
+
+int lisafs_list_entry_iterator(lisafs_directory_entry * _Nonnull entry, void * _Nullable context)
+{
+    switch (entry->header_only.etype) {
+        case emptyentry:
+        case killedentry:
+        case removed:     return 0;
+
+        case direntry:    return lisafs_list_print_directory(&entry->directory, context);
+
+        case linkentry:
+        case fileentry:
+        case pipeentry:
+        case ecentry:     return lisafs_list_print_object(&entry->object, context);
+        case threadentry: return lisafs_list_print_thread(&entry->thread, context);
+    }
+
+    return 0;
+}
+
+
+int lisafs_list(int argc, char **argv)
+{
+    int iterate_err = lisafs_iterate_entries(image, lisafs_list_entry_iterator, NULL);
+    if (iterate_err == -1) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error iterating %s: %s" "\n", program_name, image_file_path, errstr);
+        return EX_DATAERR;
+    }
 
     return EX_OK;
 }
@@ -501,11 +571,11 @@ int lisafs_sflist(int argc, char **argv)
             fprintf(stdout, "UID:\t\t"      "0x%08x:%08x" "\n", hentry.UID.a, hentry.UID.b);
             fprintf(stdout, "version:\t"    "%hd"   "\n", hentry.version);
             fprintf(stdout, "type:\t\t"     "%s"    "\n", lisafs_filetype_string(hentry.ftype));
-            fprintf(stdout, "created:\t"    "%s"    "\n", timestr(hentry.date_created));
-            fprintf(stdout, "accessed:\t"   "%s"    "\n", timestr(hentry.date_accessed));
-            fprintf(stdout, "modified:\t"   "%s"    "\n", timestr(hentry.date_modified));
-            fprintf(stdout, "backed up:\t"  "%s"    "\n", timestr(hentry.date_backup));
-            fprintf(stdout, "scavenged:\t"  "%s"    "\n", timestr(hentry.date_scavenged));
+            fprintf(stdout, "created:\t"    "%s"    "\n", lisafs_timestamp_string(hentry.date_created));
+            fprintf(stdout, "accessed:\t"   "%s"    "\n", lisafs_timestamp_string(hentry.date_accessed));
+            fprintf(stdout, "modified:\t"   "%s"    "\n", lisafs_timestamp_string(hentry.date_modified));
+            fprintf(stdout, "backed up:\t"  "%s"    "\n", lisafs_timestamp_string(hentry.date_backup));
+            fprintf(stdout, "scavenged:\t"  "%s"    "\n", lisafs_timestamp_string(hentry.date_scavenged));
             fprintf(stdout, "machine ID:\t" "%d"    "\n", hentry.machine_id);
             fprintf(stdout, "killed:\t\t"   "%s"    "\n", boolstr(hentry.killed));
             fprintf(stdout, "safety:\t\t"   "%s"    "\n", boolstr(hentry.safety_on));
