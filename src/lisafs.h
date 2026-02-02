@@ -28,6 +28,9 @@ typedef uint32_t lisafs_timestamp;
 /*! Convert a Lisa timestamp to a UNIX time_t. */
 LISAFS_EXTERN time_t lisafs_timestamp_to_time_t(lisafs_timestamp timestamp);
 
+/*! Convenience to convert a Lisa timestamp directly to a string. */
+LISAFS_EXTERN const char * _Nonnull lisafs_timestamp_string(lisafs_timestamp timestamp);
+
 
 /*! A Lisa filesystem block address is an absolute block number. */
 typedef int32_t lisafs_baddr;
@@ -358,15 +361,15 @@ typedef struct lisafs_key lisafs_key;
 
 /*! Type of a B-Tree entry. */
 enum lisafs_entrytype: int8_t {
-    emptyentry = 0,
-    direntry = 1,
-    linkentry = 2,
-    fileentry = 3,
-    pipeentry = 4,
-    ecentry = 5,
-    killedentry = 6,
-    removed = 7,
-    threadentry = 8,
+    emptyentry  = 0,    //!< empty
+    direntry    = 1,    //!< directory
+    linkentry   = 2,    //!< link
+    fileentry   = 3,    //!< file
+    pipeentry   = 4,    //!< pipe, no longer supported
+    ecentry     = 5,    //!< event channel, no longer supported
+    killedentry = 6,    //!< killed object entry
+    removed     = 7,    //!< removed
+    threadentry = 8,    //!< directory thread entry
 };
 typedef enum lisafs_entrytype lisafs_entrytype;
 
@@ -395,7 +398,7 @@ typedef struct lisafs_objectrec lisafs_objectrec;
 /*! A Lisa B-Tree entry representing a filesystem directory. */
 struct lisafs_directrec {
     lisafs_btentryheader header;
-    lisafs_nodeid nodeid;
+    lisafs_nodeid nodeID;
     lisafs_timestamp DtCreat;
     lisafs_longint unused;
 } LISAFS_PACKED;
@@ -419,12 +422,13 @@ enum lisafs_nodekind: int8_t {
 typedef enum lisafs_nodekind lisafs_nodekind;
 
 /*!
-    A Lisa B-Tree node descriptor, stored in the last 12 bytes of a2 KB page.
+    A Lisa B-Tree node descriptor, stored in the last 12 bytes of a 2KB
+    B-tree page.
 */
 struct lisafs_nodedesc {
     lisafs_integer nkeys;
-    lisafs_longint prior;
-    lisafs_longint next;
+    lisafs_paddr prior;
+    lisafs_paddr next;
     lisafs_nodekind kind;
     lisafs_byte cksum;
 } LISAFS_PACKED;
@@ -439,12 +443,19 @@ union lisafs_directory_entry {
 };
 typedef union lisafs_directory_entry lisafs_directory_entry;
 
-/*! A runtime representation of a Lisa directory. */
-struct lisafs_directory {
-    lisafs_directory_entry * _Nullable entries;
-    lisafs_integer count;
+/*! The size in bytes of a B-tree page. */
+#define LISAFS_BTREE_PAGE_SIZE	2048
+
+/*! A runtime representation of a Lisa B-tree page. */
+struct lisafs_btree_page {
+    uint8_t raw_data[LISAFS_BTREE_PAGE_SIZE];
+    lisafs_nodedesc node;
+    lisafs_integer entry_offset;
+    lisafs_paddr children_paddr;
+    lisafs_directory_entry * _Nonnull entries;
+    struct lisafs_btree_page * _Nullable * _Nullable children;
 };
-typedef struct lisafs_directory lisafs_directory;
+typedef struct lisafs_btree_page lisafs_btree_page;
 
 
 /*!
@@ -533,5 +544,23 @@ int lisafs_read_sfile(lisafs_image * _Nonnull image,
                       lisafs_fileid file,
                       void * _Nonnull buf,
                       size_t buf_size);
+
+
+/*!
+    The iterator function passed to ``lisafs_iterate_entries``.
+ */
+typedef int (*lisafs_entry_iterator)(lisafs_directory_entry * _Nonnull entry,
+                                     void * _Nullable context);
+
+/*!
+     Iterate over the directory entries in the image, calling the
+     iterator function until it either returns a failure (-1), a
+     stop value (1), or there are no more entries. The iterator
+     function is passed the given context.
+ */
+int lisafs_iterate_entries(lisafs_image * _Nonnull image,
+                           lisafs_entry_iterator _Nonnull iterator,
+                           void * _Nullable context);
+
 
 #endif /* __LISAFS__H__ */

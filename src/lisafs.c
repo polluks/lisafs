@@ -33,7 +33,7 @@ struct lisafs_image {
     lisafs_s_entry * _Nullable s_files;
 
     // Cached from the image.
-    lisafs_directory directory;
+    lisafs_btree_page * _Nullable btree_root;
 };
 
 
@@ -42,6 +42,21 @@ time_t lisafs_timestamp_to_time_t(lisafs_timestamp timestamp)
     // The UNIX epoch begins 2177452800 after the Lisa epoch.
     const time_t offset = 2177452800;
     return ((time_t)timestamp) - offset;
+}
+
+const char * _Nonnull lisafs_timestamp_string(lisafs_timestamp timestamp)
+{
+    static struct tm tm;
+    static char buf[26];
+
+    if (timestamp == 0) return "never";
+
+    time_t time = lisafs_timestamp_to_time_t(timestamp);
+    gmtime_r(&time, &tm);
+    asctime_r(&tm, buf);
+    char *newline = strchr(buf, '\n');
+    if (newline) *newline = '\0';
+    return buf;
 }
 
 const char * _Nullable lisafs_filetype_string(lisafs_filetype t)
@@ -281,83 +296,233 @@ error:
 }
 
 
-struct lisafs_btree_entry {
-    lisafs_directory_entry entry;
-    struct lisafs_btree_entry * _Nullable left;
-    struct lisafs_btree_entry * _Nullable right;
-};
-typedef struct lisafs_btree_entry lisafs_btree_entry;
+int lisafs_btree_entry_offset_offset(lisafs_integer index)
+{
+    lisafs_integer node_desc_offset = LISAFS_BTREE_PAGE_SIZE - sizeof(lisafs_nodedesc);
+    lisafs_integer node_entry_offset_base = node_desc_offset - sizeof(lisafs_integer);
+    lisafs_integer node_entry_offset = node_entry_offset_base - (sizeof(lisafs_integer) * index);
+    return node_entry_offset;
+}
+
+
+const char *lisafs_btree_entrytype_string(lisafs_entrytype et)
+{
+    switch (et) {
+        case emptyentry:	return "empty";
+        case direntry:		return "directory";
+        case linkentry:		return "link";
+        case fileentry:		return "file";
+        case pipeentry:		return "pipe";
+        case ecentry:		return "ec";
+        case killedentry:	return "killed";
+        case removed:		return "removed";
+        case threadentry:	return "thread";
+        default: {
+            static char buf[32];
+            snprintf(buf, 32, "unknown(%d)", et);
+            return buf;
+        } break;
+    }
+}
+
+
+/*!
+    Dispose of a B-tree page and associated data structures.
+
+    - NOTE: Preserves `errno`.
+ */
+void lisafs_free_btree_page(lisafs_btree_page * _Nullable page)
+{
+    if (page == NULL) return;
+
+    int savederrno = errno;
+
+    free(page->entries);
+    page->entries = NULL;
+
+    if (page->node.kind == nonleaf) {
+        for (int i = 0 ; i < page->node.nkeys; i++) {
+            lisafs_free_btree_page(page->children[i]);
+            page->children[i] = NULL;
+        }
+
+        free(page->children);
+        page->children = NULL;
+    }
+
+    free(page);
+
+    errno = savederrno;
+}
+
+/*!
+     Process an individual B-tree entry based on its type.
+ */
+void lisafs_process_btree_entry(lisafs_directory_entry *raw_entry, lisafs_directory_entry *entry)
+{
+    memcpy(&entry->header_only.key, &raw_entry->header_only.key, 36);
+    entry->header_only.etype      =  raw_entry->header_only.etype;
+    entry->header_only.etype_pad  =  raw_entry->header_only.etype_pad;
+
+    switch (entry->header_only.etype) {
+        case emptyentry:
+        case killedentry:
+        case removed: {
+            // Do nothing else for an empty, killed, or removed entry.
+        } break;
+
+        case direntry: {
+            // A directory entry contains only its node ID and its
+            // creation date.
+
+            entry->directory.nodeID  = swap16(raw_entry->directory.nodeID);
+            entry->directory.DtCreat = swap32(raw_entry->directory.DtCreat);
+            entry->directory.unused  = swap32(raw_entry->directory.unused);
+        } break;
+
+        case linkentry:
+        case fileentry:
+        case pipeentry:
+        case ecentry: {
+            // A "real" filesystem object contains a bunch of stuff.
+
+            entry->object.sfile    = swap16(raw_entry->object.sfile);
+            entry->object.fileDTC  = swap32(raw_entry->object.fileDTC);
+            entry->object.fileDTM  = swap32(raw_entry->object.fileDTM);
+            entry->object.size     = swap32(raw_entry->object.size);
+            entry->object.physSize = swap32(raw_entry->object.physSize);
+            entry->object.fsOvrhd  = swap16(raw_entry->object.fsOvrhd);
+            entry->object.flags    = swap16(raw_entry->object.flags);
+            entry->object.unused   = swap32(raw_entry->object.unused);
+        } break;
+
+        case threadentry: {
+            // A thread entry contains details about itself and its parent.
+
+            entry->thread.parID      = swap16(raw_entry->thread.parID);
+            memcpy(entry->thread.myName,      raw_entry->thread.myName, 33);
+            entry->thread.myName_pad =        raw_entry->thread.myName_pad;
+            entry->thread.unused     = swap32(raw_entry->thread.unused);
+        } break;
+    }
+}
+
+/*!
+    Get a processed copy of the B-tree page that starts at the given disk
+    page address, or return `NULL` and set `errno` on failure.
+ */
+lisafs_btree_page * _Nullable lisafs_copy_btree_page(lisafs_image * _Nonnull image,
+                                                     lisafs_paddr paddr)
+{
+    assert(paddr > 0);
+
+    lisafs_btree_page *page = calloc(sizeof(lisafs_btree_page), 1);
+    if (page == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    // Fill in the raw bytes of the page from disk.
+
+    lisafs_paddr cur_paddr = paddr;
+    for (int i = 0; i < 4; i++) {
+        lisafs_page disk_page;
+        int read_err = lisafs_read_page(image, cur_paddr, &disk_page);
+        if (read_err == -1) goto error;
+
+        memcpy(&page->raw_data[i * 512], disk_page.data, 512);
+
+        cur_paddr = disk_page.label.fwdlink;
+    }
+
+    // Process its node description.
+
+    lisafs_nodedesc *raw_root_node = (lisafs_nodedesc *)&page->raw_data[LISAFS_BTREE_PAGE_SIZE - sizeof(lisafs_nodedesc)];
+    lisafs_nodedesc *node = &page->node;
+    node->nkeys = swap16(raw_root_node->nkeys);
+    node->prior = swap32(raw_root_node->prior);
+    node->next  = swap32(raw_root_node->next);
+    node->kind  = raw_root_node->kind;
+    node->cksum = raw_root_node->cksum;
+
+    if (node->kind == nonleaf) {
+        lisafs_longint *raw_children_paddr = (lisafs_longint *) &page->raw_data[0];
+        page->children_paddr = swap32(*raw_children_paddr);
+        page->entry_offset = sizeof(lisafs_longint);
+    } else {
+        page->children_paddr = -1;
+        page->entry_offset = 0;
+    }
+
+    // Process its entries.
+
+    page->entries = calloc(sizeof(lisafs_directory_entry), node->nkeys);
+    if (page->entries == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    for (int i = 0; i < node->nkeys; i++) {
+        const int entry_offset_offset = lisafs_btree_entry_offset_offset(i);
+        const lisafs_integer *entry_offset_ptr = (lisafs_integer *) &page->raw_data[entry_offset_offset];
+        lisafs_integer entry_offset = swap16(*entry_offset_ptr);
+
+        lisafs_directory_entry *raw_entry = (lisafs_directory_entry *) &page->raw_data[entry_offset + page->entry_offset];
+        lisafs_directory_entry *entry     = &page->entries[i];
+
+        lisafs_process_btree_entry(raw_entry, entry);
+    }
+
+    // Allocate and copy child pages for non-leaf pages.
+
+    if (node->kind == nonleaf) {
+        page->children = calloc(sizeof(lisafs_btree_page *), node->nkeys);
+        if (page->children == NULL) {
+            errno = ENOMEM;
+            goto error;
+        }
+
+        lisafs_paddr child_paddr = page->children_paddr;
+        for (int i = 0; i < node->nkeys; i++) {
+            page->children[i] = lisafs_copy_btree_page(image, child_paddr);
+            if (page->children[i] == NULL) {
+                errno = ENOMEM;
+                goto error;
+            }
+
+            child_paddr = page->children[i]->node.next;
+        }
+    }
+
+    return page;
+
+error:
+    lisafs_free_btree_page(page);
+    return NULL;
+}
 
 
 int lisafs_cache_directory(lisafs_image * _Nonnull image)
 {
-    // Get the first two B-tree pages of the catalog file.
+    // Get the B-tree root of the catalog file.
 
-    uint8_t btpage[2048];
-
-    lisafs_paddr paddr = image->mddf.root_page;
-    for (int i = 0; i < 4; i++) {
-        lisafs_page page;
-        int read_err = lisafs_read_page(image, paddr, &page);
-        if (read_err == -1) goto error;
-
-        memcpy(&btpage[i * 512], page.data, 512);
-
-        paddr = page.label.fwdlink;
+    image->btree_root = lisafs_copy_btree_page(image, image->mddf.root_page);
+    if (image->btree_root == NULL) {
+        errno = ENOMEM;
+        goto error;
     }
 
-    // Get the node description from it.
+    // Process the root and any pages it refers to, in order to get the
+    // entire catalog into memory.
 
-    lisafs_nodedesc root_node;
-    lisafs_nodedesc *raw_root_node = (lisafs_nodedesc *) &btpage[2048 - 12];
-    root_node.nkeys = swap16(raw_root_node->nkeys);
-    root_node.prior = swap32(raw_root_node->prior);
-    root_node.next  = swap32(raw_root_node->next);
-    root_node.kind  = raw_root_node->kind;
-    root_node.cksum = raw_root_node->cksum;
-
-//    fprintf(stdout, "nkeys:\t" "%hd" "\n", root_node.nkeys);
-//    fprintf(stdout, "prior:\t" "%d"  "\n", root_node.prior);
-//    fprintf(stdout, "next:\t"  "%d"  "\n", root_node.next);
-//    fprintf(stdout, "kind:\t"  "%s"  "\n", ((root_node.kind == leaf) ? "leaf" : "nonleaf"));
-
-    // Now go through its entries and compose the real tree.
-
-    lisafs_paddr pg;
-    int offset;
-    if (root_node.kind == nonleaf) {
-        lisafs_paddr *raw_pg = (lisafs_paddr *)&btpage[0];
-        pg = swap32(*raw_pg);
-        offset = 4;
-//        fprintf(stdout, "pg:\t" "%d" "\n", pg);
-    } else {
-        pg = -1;
-        offset = 0;
-    }
-    lisafs_directory_entry *raw_entry = (lisafs_directory_entry *)&btpage[offset];
-    lisafs_directory_entry entry;
-
-    memcpy(&entry.header_only.key, &raw_entry->header_only.key, 36);
-    entry.header_only.etype      =  raw_entry->header_only.etype;
-    entry.header_only.etype_pad  =  raw_entry->header_only.etype_pad;
-
-//    fprintf(stdout, "entry 0 type:\t");
-//    switch (entry.header_only.etype) {
-//        case emptyentry:  fprintf(stdout, "empty"); break;
-//        case direntry:    fprintf(stdout, "directory"); break;
-//        case linkentry:   fprintf(stdout, "link"); break;
-//        case fileentry:   fprintf(stdout, "file"); break;
-//        case pipeentry:   fprintf(stdout, "pipe"); break;
-//        case ecentry:     fprintf(stdout, "ec"); break;
-//        case killedentry: fprintf(stdout, "killed"); break;
-//        case removed:     fprintf(stdout, "removed)"); break;
-//        case threadentry: fprintf(stdout, "thread"); break;
-//    }
-//    fprintf(stdout, "\n");
+    // TODO: Process B-Tree
 
     return 0;
 
 error:
+    lisafs_free_btree_page(image->btree_root);
+    image->btree_root = NULL;
+
     return -1;
 }
 
@@ -410,6 +575,9 @@ int lisafs_close(lisafs_image * _Nullable image)
     if (image == NULL) return 0;
 
     int savederrno = errno; // don't let the act of saving destroy errno
+
+    lisafs_free_btree_page(image->btree_root);
+    image->btree_root = NULL;
 
     free(image->s_files);
     image->s_files = NULL;
@@ -818,4 +986,47 @@ error:
     map = NULL;
 
     return -1;
+}
+
+
+int lisafs_iterate_page_entries(lisafs_btree_page * _Nonnull page,
+                                lisafs_entry_iterator _Nonnull iterator,
+                                void * _Nullable context)
+{
+    if (page->node.kind == nonleaf) {
+        // For an nonleaf page, iterate this page's child entry and then
+        // iterate the associated child page.
+
+        for (int ci = 0; ci < page->node.nkeys; ci++) {
+            lisafs_directory_entry *entry = &page->entries[ci];
+            int result = iterator(entry, context);
+            if (result != 0) return result;
+
+            lisafs_btree_page *child_page = page->children[ci];
+            assert(child_page != NULL); // should be impossible
+
+            int child_result = lisafs_iterate_page_entries(child_page, iterator, context);
+            if (child_result != 0) return child_result;
+        }
+    } else {
+        // For a leaf page, iterate all of this page's entries.
+
+        for (int i = 0; i < page->node.nkeys; i++) {
+            lisafs_directory_entry *entry = &page->entries[i];
+            int result = iterator(entry, context);
+            if (result != 0) return result;
+        }
+    }
+
+    return 0;
+}
+
+
+int lisafs_iterate_entries(lisafs_image * _Nonnull image,
+                           lisafs_entry_iterator _Nonnull iterator,
+                           void * _Nullable context)
+{
+    assert(image->btree_root != NULL);
+
+    return lisafs_iterate_page_entries(image->btree_root, iterator, context);
 }
