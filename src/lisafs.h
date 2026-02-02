@@ -458,6 +458,22 @@ struct lisafs_btree_page {
 typedef struct lisafs_btree_page lisafs_btree_page;
 
 
+/*! A catalog entry used on pre-3.0 filesystems. */
+struct lisafs_centry {
+    char name[33];
+    char name_pad;
+    lisafs_entrytype cetype;
+    lisafs_byte cetype_pad;
+    lisafs_fileid sfile;
+    lisafs_longint attributes;
+    lisafs_paddr readpage;
+    lisafs_integer readoffset;
+    lisafs_paddr writepage;
+    lisafs_integer writeoffset;
+} LISAFS_PACKED;
+typedef struct lisafs_centry lisafs_centry;
+
+
 /*!
     A Lisa filesystem image. The contents are private.
  */
@@ -494,7 +510,14 @@ void * _Nonnull lisafs_get_loader_header(lisafs_image * _Nonnull image);
  */
 lisafs_mddf * _Nonnull lisafs_get_mddf(lisafs_image * _Nonnull image);
 
+
+/*! Get the version of the filesystem in the given filesystem image. */
+lisafs_fsversion lisafs_get_fsversion(lisafs_image * _Nonnull image);
+
+/*! Get the volume name represented by the given filesystem image. */
 const char * _Nonnull lisafs_get_volname(lisafs_image * _Nonnull image);
+
+/*! Get the password for the given filesystem image. */
 const char * _Nonnull lisafs_get_password(lisafs_image * _Nonnull image);
 
 /*!
@@ -547,20 +570,41 @@ int lisafs_read_sfile(lisafs_image * _Nonnull image,
 
 
 /*!
-    The iterator function passed to ``lisafs_iterate_entries``.
+    The iterator function passed to ``lisafs_iterate_btree_entries``.
  */
-typedef int (*lisafs_entry_iterator)(lisafs_directory_entry * _Nonnull entry,
-                                     void * _Nullable context);
+typedef int (*lisafs_btree_entry_iterator)(lisafs_directory_entry * _Nonnull entry,
+                                           void * _Nullable context);
 
 /*!
-     Iterate over the directory entries in the image, calling the
-     iterator function until it either returns a failure (-1), a
-     stop value (1), or there are no more entries. The iterator
-     function is passed the given context.
+    Iterate over the directory entries in the b-tree, calling the
+    iterator function until it either returns a failure (-1), a
+    stop value (1), or there are no more entries. The iterator
+    function is passed the given context.
+
+    - NOTE: Release 3.0 only.
  */
-int lisafs_iterate_entries(lisafs_image * _Nonnull image,
-                           lisafs_entry_iterator _Nonnull iterator,
-                           void * _Nullable context);
+int lisafs_iterate_btree_entries(lisafs_image * _Nonnull image,
+                                 lisafs_btree_entry_iterator _Nonnull iterator,
+                                 void * _Nullable context);
+
+
+/*!
+    The iterator function passed to ``lisafs_iterate_directory_entries``.
+ */
+typedef int (*lisafs_directory_entry_iterator)(lisafs_centry * _Nonnull entry,
+                                               void * _Nullable context);
+
+/*!
+     Iterate over the non-empty directory entries, calling the iterator
+     function until it either returns a failure (-1), a stop value (1),
+     or there are no more entries. The iterator function is passed the
+     given context.
+
+     - NOTE: Release 2.0 and earlier only.
+ */
+int lisafs_iterate_directory_entries(lisafs_image * _Nonnull image,
+                                     lisafs_directory_entry_iterator _Nonnull iterator,
+                                     void * _Nullable context);
 
 
 #endif /* __LISAFS__H__ */

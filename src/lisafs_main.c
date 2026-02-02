@@ -436,7 +436,7 @@ int lisafs_list_print_thread(lisafs_threadrec * _Nonnull thread, void * _Nullabl
     return 0;
 }
 
-int lisafs_list_entry_iterator(lisafs_directory_entry * _Nonnull entry, void * _Nullable context)
+int lisafs_list_btree_entry_iterator(lisafs_directory_entry * _Nonnull entry, void * _Nullable context)
 {
     switch (entry->header_only.etype) {
         case emptyentry:
@@ -456,9 +456,63 @@ int lisafs_list_entry_iterator(lisafs_directory_entry * _Nonnull entry, void * _
 }
 
 
+int lisafs_list_print_centry(lisafs_centry * _Nonnull centry, void * _Nullable context)
+{
+    char ename[33] = {0};
+    memcpy(ename, &centry->name[1], centry->name[0]);
+
+    char c;
+    switch (centry->cetype) {
+        case linkentry: c = 'L'; break;
+        case fileentry: c = 'F'; break;
+        case pipeentry: c = 'P'; break;
+        case ecentry:   c = 'E'; break;
+        default:        c = '?'; break;
+    }
+
+    lisafs_longint size;
+    if (centry->cetype) {
+        size = lisafs_get_sfile_size(image, centry->sfile);
+    } else {
+        size = 0;
+    }
+    if (size == -1) return -1;
+
+    fprintf(stdout, "%c %*s  %*hd %*d" "\n", c,
+            -32, ename,
+            5, centry->sfile,
+            10, size);
+
+    return 0;
+}
+
+int lisafs_list_directory_entry_iterator(lisafs_centry * _Nonnull centry, void * _Nullable context)
+{
+    switch (centry->cetype) {
+        case linkentry:
+        case fileentry:
+        case pipeentry:
+        case ecentry:
+            return lisafs_list_print_centry(centry, context);
+
+        default:
+            // Skip all other types of entry.
+            return 0;
+    }
+}
+
+
 int lisafs_list(int argc, char **argv)
 {
-    int iterate_err = lisafs_iterate_entries(image, lisafs_list_entry_iterator, NULL);
+    lisafs_fsversion fsversion = lisafs_get_fsversion(image);
+
+    int iterate_err;
+    if (fsversion == release3) {
+        iterate_err = lisafs_iterate_btree_entries(image, lisafs_list_btree_entry_iterator, NULL);
+    } else {
+        iterate_err = lisafs_iterate_directory_entries(image, lisafs_list_directory_entry_iterator, NULL);
+    }
+
     if (iterate_err == -1) {
         const char *errstr = strerror(errno);
         fprintf(stderr, "%s: error iterating %s: %s" "\n", program_name, image_file_path, errstr);

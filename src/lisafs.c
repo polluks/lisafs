@@ -21,19 +21,38 @@ struct lisafs_image {
     lisafs_mddf mddf;
 
     // Cached from header
+
     char volname[33];
     char password[33];
+
+    //! Physical block corresponding to logical page 0.
     lisafs_baddr block0;
 
-    // Cached from MDDF
+    // Cached from MDDF.
+
+    //! The version of the filesystem.
+    lisafs_fsversion fsversion;
+
+    //! First page in S-file list.
     lisafs_paddr slist_addr;
+
+    //! Root page of catalog B-tree.
+    //! - NOTE: Release 3.0 only.
     lisafs_paddr root_page;
 
-    // Cached from the image.
-    lisafs_s_entry * _Nullable s_files;
+    //! Maximum number of files on volume.
+    lisafs_integer maxfiles;
 
-    // Cached from the image.
+    //! An array of `maxfiles` entries, cached from the image.
+    lisafs_s_entry * _Nullable sfiles;
+
+    //! The root of the catalog B-tree.
+    //! - NOTE: Release 3.0 only.
     lisafs_btree_page * _Nullable btree_root;
+
+    //! An array of `maxfiles` entries, cached from the image.
+    //! - NOTE: Only prior to release 3.0.
+    lisafs_centry * _Nullable centries;
 };
 
 
@@ -81,7 +100,7 @@ const char * _Nullable lisafs_filetype_string(lisafs_filetype t)
         case tempfile:      return "tempfile";
         default: {
             static char buf[32];
-            snprintf(buf, 32, "unknown (%d)", (int)t);
+            snprintf(buf, 32, "unknown(%d)", (int)t);
             return buf;
         } break;
     }
@@ -123,7 +142,7 @@ const char * _Nonnull lisafs_fsversion_string(lisafs_fsversion version)
         case release2: return "2.0";
         case release3: return "3.0";
         default:
-            snprintf(buf, 32, "Unknown (%hd)", version);
+            snprintf(buf, 32, "unknown(%hd)", version);
             return buf;
     }
 }
@@ -220,8 +239,10 @@ int lisafs_read_mddf(lisafs_image * _Nonnull image)
     memset(image->password, 0, 33);
     memcpy(image->password, &mddf->password[1], password_len);
 
+    image->fsversion  = mddf->fsversion;
     image->slist_addr = mddf->slist_addr;
-    image->root_page = mddf->root_page;
+    image->root_page  = mddf->root_page;
+    image->maxfiles   = mddf->maxfiles;
 
     return 0;
 
@@ -230,7 +251,7 @@ error:
 }
 
 
-int lisafs_cache_s_files(lisafs_image * _Nonnull image)
+int lisafs_cache_sfiles(lisafs_image * _Nonnull image)
 {
     const lisafs_paddr s_files_start = image->mddf.slist_addr;
     const lisafs_integer slist_block_count = image->mddf.slist_block_count;
@@ -239,8 +260,9 @@ int lisafs_cache_s_files(lisafs_image * _Nonnull image)
 
     const lisafs_integer slist_packing = image->mddf.slist_packing;
     const lisafs_integer slist_max_entries = slist_packing * slist_block_count;
-    image->s_files = calloc(sizeof(lisafs_s_entry), slist_max_entries);
-    if (image->s_files == NULL) {
+    const lisafs_integer slist_count = image->maxfiles < slist_max_entries ? image->maxfiles : slist_max_entries;
+    image->sfiles = calloc(sizeof(lisafs_s_entry), slist_count);
+    if (image->sfiles == NULL) {
         errno = ENOMEM;
         goto error;
     }
@@ -256,8 +278,10 @@ int lisafs_cache_s_files(lisafs_image * _Nonnull image)
 
         lisafs_s_entry *slist_page_entries = (lisafs_s_entry *)page.data;
         for (int i = 0; i < slist_packing; i++) {
-            int entry_idx = slist_packing * b + i;
-            lisafs_s_entry *entry = &image->s_files[entry_idx];
+            const int entry_idx = slist_packing * b + i;
+            if (entry_idx >= slist_count) break;
+
+            lisafs_s_entry *entry = &image->sfiles[entry_idx];
             lisafs_s_entry *raw_entry = &slist_page_entries[i];
 
             entry->hintaddr = swap32(raw_entry->hintaddr);
@@ -267,27 +291,30 @@ int lisafs_cache_s_files(lisafs_image * _Nonnull image)
         }
     }
 
-    // Now set up entries for the always-present special files.
+    // Now set up entries for the always-present special files that
+    // aren't actually recorded in the v3 filesystem.
 
-    image->s_files[LISAFS_MDDF_SNUM].hintaddr = 0;
-    image->s_files[LISAFS_MDDF_SNUM].fileaddr = image->mddf.MDDFaddr;
-    image->s_files[LISAFS_MDDF_SNUM].filesize = image->mddf.MDDFsize;
-    image->s_files[LISAFS_MDDF_SNUM].version = 0;
+    if (image->fsversion == release3) {
+        image->sfiles[LISAFS_MDDF_SNUM].hintaddr = 0;
+        image->sfiles[LISAFS_MDDF_SNUM].fileaddr = image->mddf.MDDFaddr;
+        image->sfiles[LISAFS_MDDF_SNUM].filesize = image->mddf.MDDFsize;
+        image->sfiles[LISAFS_MDDF_SNUM].version = 0;
 
-    image->s_files[LISAFS_BITMAP_SNUM].hintaddr = 0;
-    image->s_files[LISAFS_BITMAP_SNUM].fileaddr = image->mddf.bitmap_addr;
-    image->s_files[LISAFS_BITMAP_SNUM].filesize = image->mddf.bitmap_pages * image->mddf.datasize;
-    image->s_files[LISAFS_BITMAP_SNUM].version = 0;
+        image->sfiles[LISAFS_BITMAP_SNUM].hintaddr = 0;
+        image->sfiles[LISAFS_BITMAP_SNUM].fileaddr = image->mddf.bitmap_addr;
+        image->sfiles[LISAFS_BITMAP_SNUM].filesize = image->mddf.bitmap_pages * image->mddf.datasize;
+        image->sfiles[LISAFS_BITMAP_SNUM].version = 0;
 
-    image->s_files[LISAFS_SLIST_SNUM].hintaddr = 0;
-    image->s_files[LISAFS_SLIST_SNUM].fileaddr = image->mddf.slist_addr;
-    image->s_files[LISAFS_SLIST_SNUM].filesize = image->mddf.slist_block_count * image->mddf.datasize;
-    image->s_files[LISAFS_SLIST_SNUM].version = 0;
+        image->sfiles[LISAFS_SLIST_SNUM].hintaddr = 0;
+        image->sfiles[LISAFS_SLIST_SNUM].fileaddr = image->mddf.slist_addr;
+        image->sfiles[LISAFS_SLIST_SNUM].filesize = image->mddf.slist_block_count * image->mddf.datasize;
+        image->sfiles[LISAFS_SLIST_SNUM].version = 0;
 
-    image->s_files[LISAFS_ROOTDIR_SNUM].hintaddr = 0;
-    image->s_files[LISAFS_ROOTDIR_SNUM].fileaddr = image->mddf.root_page;
-    image->s_files[LISAFS_ROOTDIR_SNUM].filesize = ((1 << image->mddf.tree_depth) - 1) * (image->mddf.datasize * 4);
-    image->s_files[LISAFS_ROOTDIR_SNUM].version = 0;
+        image->sfiles[LISAFS_ROOTDIR_SNUM].hintaddr = 0;
+        image->sfiles[LISAFS_ROOTDIR_SNUM].fileaddr = image->mddf.root_page;
+        image->sfiles[LISAFS_ROOTDIR_SNUM].filesize = ((1 << image->mddf.tree_depth) - 1) * (image->mddf.datasize * 4);
+        image->sfiles[LISAFS_ROOTDIR_SNUM].version = 0;
+    }
 
     return 0;
 
@@ -305,7 +332,7 @@ int lisafs_btree_entry_offset_offset(lisafs_integer index)
 }
 
 
-const char *lisafs_btree_entrytype_string(lisafs_entrytype et)
+const char *lisafs_entrytype_string(lisafs_entrytype et)
 {
     switch (et) {
         case emptyentry:	return "empty";
@@ -411,7 +438,7 @@ void lisafs_process_btree_entry(lisafs_directory_entry *raw_entry, lisafs_direct
     Get a processed copy of the B-tree page that starts at the given disk
     page address, or return `NULL` and set `errno` on failure.
  */
-lisafs_btree_page * _Nullable lisafs_copy_btree_page(lisafs_image * _Nonnull image,
+lisafs_btree_page * _Nullable lisafs_copy_btree_pages(lisafs_image * _Nonnull image,
                                                      lisafs_paddr paddr)
 {
     assert(paddr > 0);
@@ -484,7 +511,7 @@ lisafs_btree_page * _Nullable lisafs_copy_btree_page(lisafs_image * _Nonnull ima
 
         lisafs_paddr child_paddr = page->children_paddr;
         for (int i = 0; i < node->nkeys; i++) {
-            page->children[i] = lisafs_copy_btree_page(image, child_paddr);
+            page->children[i] = lisafs_copy_btree_pages(image, child_paddr);
             if (page->children[i] == NULL) {
                 errno = ENOMEM;
                 goto error;
@@ -502,26 +529,86 @@ error:
 }
 
 
-int lisafs_cache_directory(lisafs_image * _Nonnull image)
+int lisafs_cache_btree(lisafs_image * _Nonnull image)
 {
-    // Get the B-tree root of the catalog file.
+    assert(image->fsversion == release3);
 
-    image->btree_root = lisafs_copy_btree_page(image, image->mddf.root_page);
+    // Pull the entire B-tree into memory.
+
+    image->btree_root = lisafs_copy_btree_pages(image, image->mddf.root_page);
     if (image->btree_root == NULL) {
         errno = ENOMEM;
         goto error;
     }
-
-    // Process the root and any pages it refers to, in order to get the
-    // entire catalog into memory.
-
-    // TODO: Process B-Tree
 
     return 0;
 
 error:
     lisafs_free_btree_page(image->btree_root);
     image->btree_root = NULL;
+
+    return -1;
+}
+
+
+int lisafs_cache_catalog(lisafs_image * _Nonnull image)
+{
+    lisafs_centry *raw_centries = NULL;
+
+    assert(image->fsversion < release3);
+
+    // Pull the entire directory into memory.
+
+    lisafs_longint size = lisafs_get_sfile_size(image, LISAFS_ROOTDIR_SNUM);
+    if (size == -1) goto error;
+
+    lisafs_integer count = size / sizeof(lisafs_centry);
+    if (count != image->maxfiles) {
+        errno = EFTYPE;
+        goto error;
+    }
+
+    raw_centries = calloc(size, 1);
+    if (raw_centries == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    int read_err = lisafs_read_sfile(image, LISAFS_ROOTDIR_SNUM, raw_centries, size);
+    if (read_err == -1) goto error;
+
+    // Process them for use on this system.
+
+    image->centries = calloc(sizeof(lisafs_centry), count);
+    if (image->centries == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    for (int i = 0; i < count; i++) {
+        lisafs_centry *raw_centry = &raw_centries[i];
+        lisafs_centry *centry     = &image->centries[i];
+
+        memcpy(centry->name,         raw_centry->name, 33);
+        centry->name_pad    =        raw_centry->name_pad;
+        centry->cetype      =        raw_centry->cetype;
+        centry->cetype_pad  =        raw_centry->cetype_pad;
+        centry->sfile       = swap16(raw_centry->sfile);
+        centry->attributes  = swap32(raw_centry->attributes);
+        centry->readpage    = swap32(raw_centry->readpage);
+        centry->readoffset  = swap16(raw_centry->readoffset);
+        centry->writepage   = swap32(raw_centry->writepage);
+        centry->writeoffset = swap16(raw_centry->writeoffset);
+    }
+
+    free(raw_centries);
+    raw_centries = NULL;
+
+    return 0;
+
+error:
+    free(raw_centries);
+    raw_centries = NULL;
 
     return -1;
 }
@@ -555,13 +642,20 @@ lisafs_image * _Nullable lisafs_open(const char * _Nonnull const path)
 
     // Read and validate the S-files.
 
-    int s_files_err = lisafs_cache_s_files(image);
+    int s_files_err = lisafs_cache_sfiles(image);
     if (s_files_err) goto error;
 
-    // Read and validate the directory (catalog B-Tree).
+    // Read and validate the catalog, either by reading in the catalog
+    // B-tree (for v3 filesystems) or the catalog entries (for v2 and
+    // earlier filesystems).
 
-    int directory_err = lisafs_cache_directory(image);
-    if (directory_err) goto error;
+    if (image->fsversion == release3) {
+        int btree_err = lisafs_cache_btree(image);
+        if (btree_err) goto error;
+    } else {
+        int directory_err = lisafs_cache_catalog(image);
+        if (directory_err) goto error;
+    }
 
     return image;
 
@@ -579,8 +673,8 @@ int lisafs_close(lisafs_image * _Nullable image)
     lisafs_free_btree_page(image->btree_root);
     image->btree_root = NULL;
 
-    free(image->s_files);
-    image->s_files = NULL;
+    free(image->sfiles);
+    image->sfiles = NULL;
 
     image_dc42_close(image->image);
     image->image = NULL;
@@ -607,6 +701,11 @@ void * _Nonnull lisafs_get_loader_header(lisafs_image * _Nonnull image)
 lisafs_mddf * _Nonnull lisafs_get_mddf(lisafs_image * _Nonnull image)
 {
     return &image->mddf;
+}
+
+lisafs_fsversion lisafs_get_fsversion(lisafs_image * _Nonnull image)
+{
+    return image->fsversion;
 }
 
 const char * _Nonnull lisafs_get_volname(lisafs_image * _Nonnull image)
@@ -692,17 +791,17 @@ int lisafs_get_sfile_info(lisafs_image * _Nonnull image,
                           lisafs_s_entry * _Nonnull entry)
 {
     assert(image->image != NULL);
-    assert(image->s_files != NULL);
+    assert(image->sfiles != NULL);
 
-    if ((file < 0) || (file >= image->mddf.empty_file)) {
+    if ((file < 0) || ( file >= image->maxfiles)) {
         errno = EINVAL;
         goto error;
     }
 
-    entry->hintaddr = image->s_files[file].hintaddr;
-    entry->fileaddr = image->s_files[file].fileaddr;
-    entry->filesize = image->s_files[file].filesize;
-    entry->version  = image->s_files[file].version;
+    entry->hintaddr = image->sfiles[file].hintaddr;
+    entry->fileaddr = image->sfiles[file].fileaddr;
+    entry->filesize = image->sfiles[file].filesize;
+    entry->version  = image->sfiles[file].version;
 
     return 0;
 
@@ -734,8 +833,11 @@ int lisafs_read_sfile_hints(lisafs_image * _Nonnull image,
     assert(image->image != NULL);
 
     // Don't support special S-files.
+    // Prior to the v3 filesystem, the root catalog was accessed as an S-file.
 
-    if (file < LISAFS_FIRSTUSER_SF) {
+    if (   ((image->fsversion == release3) && (file < LISAFS_FIRSTUSER_SF))
+        || ((image->fsversion <  release3) && (file < LISAFS_ROOTDIR_SNUM)))
+    {
         errno = EINVAL;
         goto error;
     }
@@ -811,8 +913,11 @@ lisafs_mapentry * _Nullable lisafs_copy_sfile_map(
     lisafs_integer map_count = 0;
 
     // Don't support special S-files.
+    // Prior to the v3 filesystem, the root catalog was accessed as an S-file.
 
-    if (file < LISAFS_FIRSTUSER_SF) {
+    if (   ((image->fsversion == release3) && (file < LISAFS_FIRSTUSER_SF))
+        || ((image->fsversion  < release3) && (file < LISAFS_ROOTDIR_SNUM)))
+    {
         errno = EINVAL;
         goto error;
     }
@@ -839,7 +944,7 @@ lisafs_mapentry * _Nullable lisafs_copy_sfile_map(
     // entry, and its subsequent pages are only locatable via the label
     // forward chain.)
 
-    bool oldfs = (image->mddf.fsversion <= release1);
+    bool oldfs = (image->fsversion <= release1);
 
     // Get the raw filemap and convert it to the one that gets returned.
 
@@ -942,8 +1047,11 @@ int lisafs_read_sfile(lisafs_image * _Nonnull image,
     lisafs_mapentry *map = NULL;    // need to clean up at exit
 
     // Don't support special S-files.
+    // Prior to the v3 filesystem, the root catalog was accessed as an S-file.
 
-    if (file < LISAFS_FIRSTUSER_SF) {
+    if (   ((image->fsversion == release3) && (file < LISAFS_FIRSTUSER_SF))
+        || ((image->fsversion  < release3) && (file < LISAFS_ROOTDIR_SNUM)))
+    {
         errno = EINVAL;
         goto error;
     }
@@ -990,7 +1098,7 @@ error:
 
 
 int lisafs_iterate_page_entries(lisafs_btree_page * _Nonnull page,
-                                lisafs_entry_iterator _Nonnull iterator,
+                                lisafs_btree_entry_iterator _Nonnull iterator,
                                 void * _Nullable context)
 {
     if (page->node.kind == nonleaf) {
@@ -1022,11 +1130,36 @@ int lisafs_iterate_page_entries(lisafs_btree_page * _Nonnull page,
 }
 
 
-int lisafs_iterate_entries(lisafs_image * _Nonnull image,
-                           lisafs_entry_iterator _Nonnull iterator,
-                           void * _Nullable context)
+int lisafs_iterate_btree_entries(lisafs_image * _Nonnull image,
+                                 lisafs_btree_entry_iterator _Nonnull iterator,
+                                 void * _Nullable context)
 {
+    if (image->fsversion != release3) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
     assert(image->btree_root != NULL);
 
     return lisafs_iterate_page_entries(image->btree_root, iterator, context);
+}
+
+
+int lisafs_iterate_directory_entries(lisafs_image * _Nonnull image,
+                                     lisafs_directory_entry_iterator _Nonnull iterator,
+                                     void * _Nullable context)
+{
+    if (image->fsversion == release3) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    assert(image->centries != NULL);
+
+    for (int i = 0; i < image->maxfiles; i++) {
+        int result = iterator(&image->centries[i], context);
+        if (result != 0) return result;
+    }
+
+    return 0;
 }
