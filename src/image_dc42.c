@@ -1,17 +1,17 @@
 //  image_dc42.c
-//	Part of LisaFilesystem.
+//	Part of lisafs.
 //
 //	Copyright © 2026 Christopher M. Hanson. All rights reserved.
 //  See file COPYING for details.
 
 #include "image_dc42.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "endian_utils.h"
 #include "io_utils.h"
 
 
@@ -22,8 +22,8 @@ const size_t image_dc42_tag_size = 12;
 
 struct image_dc42 {
     image_dc42_header header;
-    FILE * LISAFS_NULLABLE file;
-    char * LISAFS_NULLABLE name;
+    FILE * _Nullable file;
+    char * _Nullable name;
 };
 
 
@@ -117,13 +117,10 @@ const char * _Nonnull image_dc42_get_encoding_name(image_dc42_encoding encoding)
     return buf;
 }
 
-/*
-    NOTE: We're not currently considering interleave under the
-          assumption that interleave information is recorded in a disk
-          image so it can be accurately written, but that the blocks in
-          the image are stored in logical rather than physical order.
+/*!
+    Get the byte offset of the start of the given block in the disk
+    image.
  */
-
 inline
 static off_t image_dc42_offset_for_block(image_dc42 * _Nonnull image,
                                          size_t block)
@@ -132,6 +129,10 @@ static off_t image_dc42_offset_for_block(image_dc42 * _Nonnull image,
          + (block * image_dc42_block_size);
 }
 
+/*!
+    Get the byte offset of the start of the given block's tag in the
+    disk image.
+ */
 inline
 static off_t image_dc42_offset_for_tag(image_dc42 * _Nonnull image,
                                        size_t block)
@@ -150,7 +151,10 @@ int image_dc42_read_block(image_dc42 * _Nonnull image,
                           uint8_t * _Nonnull block,
                           uint8_t * _Nonnull tag)
 {
-    assert(image->file != NULL);
+    if (image->file == NULL) {
+        errno = EBADF;
+        return -1;
+    }
 
     off_t block_off = image_dc42_offset_for_block(image, n);
 

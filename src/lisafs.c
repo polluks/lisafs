@@ -1,5 +1,5 @@
 //  lisafs.c
-//	Part of LisaFilesystem.
+//	Part of lisafs.
 //
 //	Copyright © 2026 Christopher M. Hanson. All rights reserved.
 //  See file COPYING for details.
@@ -8,11 +8,15 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "endian_utils.h"
 #include "image_dc42.h"
-#include "io_utils.h"
+
+
+LISAFS_SOURCE_BEGIN
 
 
 struct lisafs_image {
@@ -33,13 +37,6 @@ struct lisafs_image {
     //! The version of the filesystem.
     lisafs_fsversion fsversion;
 
-    //! First page in S-file list.
-    lisafs_paddr slist_addr;
-
-    //! Root page of catalog B-tree.
-    //! - NOTE: Release 3.0 only.
-    lisafs_paddr root_page;
-
     //! Maximum number of files on volume.
     lisafs_integer maxfiles;
 
@@ -58,7 +55,7 @@ struct lisafs_image {
 
 time_t lisafs_timestamp_to_time_t(lisafs_timestamp timestamp)
 {
-    // The UNIX epoch begins 2177452800 after the Lisa epoch.
+    // The UNIX epoch begins 2177452800 seconds after the Lisa epoch.
     const time_t offset = 2177452800;
     return ((time_t)timestamp) - offset;
 }
@@ -110,8 +107,8 @@ const char * _Nullable lisafs_filetype_string(lisafs_filetype t)
 int lisafs_read_header(lisafs_image * _Nonnull image)
 {
     lisafs_block block0;
-    lisafs_tag tag0;
-    int read_err = image_dc42_read_block(image->image, 0, block0, tag0);
+    lisafs_label label0;
+    int read_err = image_dc42_read_block(image->image, 0, block0, label0);
     if (read_err == -1) goto error;
 
     lisafs_mf_loader_loader_header *header = &image->header;
@@ -151,8 +148,8 @@ const char * _Nonnull lisafs_fsversion_string(lisafs_fsversion version)
 int lisafs_read_mddf(lisafs_image * _Nonnull image)
 {
     lisafs_block mddf_block;
-    lisafs_tag mddf_tag;
-    int read_err = image_dc42_read_block(image->image, image->block0, mddf_block, mddf_tag);
+    lisafs_label mddf_label;
+    int read_err = image_dc42_read_block(image->image, image->block0, mddf_block, mddf_label);
     if (read_err == -1) goto error;
 
     lisafs_mddf *mddf = &image->mddf;
@@ -206,7 +203,8 @@ int lisafs_read_mddf(lisafs_image * _Nonnull image)
     mddf->freecount         = swap32(raw_mddf->freecount);
     mddf->rootsnum	        = swap16(raw_mddf->rootsnum);
     mddf->rootmaxentries	= swap16(raw_mddf->rootmaxentries);
-    mddf->mountinfo         = swap16(raw_mddf->mountinfo);
+    mddf->mountinfo         =        raw_mddf->mountinfo;
+    mddf->mountinfo_pad     =        raw_mddf->mountinfo_pad;
     mddf->overmount_stamp.a = swap32(raw_mddf->overmount_stamp.a);
     mddf->overmount_stamp.b = swap32(raw_mddf->overmount_stamp.b);
     mddf->pmem_id	        = swap32(raw_mddf->pmem_id);
@@ -240,8 +238,6 @@ int lisafs_read_mddf(lisafs_image * _Nonnull image)
     memcpy(image->password, &mddf->password[1], password_len);
 
     image->fsversion  = mddf->fsversion;
-    image->slist_addr = mddf->slist_addr;
-    image->root_page  = mddf->root_page;
     image->maxfiles   = mddf->maxfiles;
 
     return 0;
@@ -670,8 +666,13 @@ int lisafs_close(lisafs_image * _Nullable image)
 
     int savederrno = errno; // don't let the act of saving destroy errno
 
-    lisafs_free_btree_page(image->btree_root);
-    image->btree_root = NULL;
+    if (image->fsversion == release3) {
+        lisafs_free_btree_page(image->btree_root);
+        image->btree_root = NULL;
+    } else {
+        free(image->centries);
+        image->centries = NULL;
+    }
 
     free(image->sfiles);
     image->sfiles = NULL;
@@ -721,11 +722,11 @@ const char * _Nonnull lisafs_get_password(lisafs_image * _Nonnull image)
 int lisafs_read_block(lisafs_image * _Nonnull image,
                       lisafs_baddr n,
                       lisafs_block _Nonnull block,
-                      lisafs_tag _Nonnull tag)
+                      lisafs_label _Nonnull label)
 {
     assert(image->image != NULL);
 
-    return image_dc42_read_block(image->image, n, block, tag);
+    return image_dc42_read_block(image->image, n, block, label);
 }
 
 int lisafs_read_page(lisafs_image * _Nonnull image,
@@ -936,13 +937,15 @@ lisafs_mapentry * _Nullable lisafs_copy_sfile_map(
         goto error;
     }
 
-    // If it's an old (1.0 or earlier) filesystem, it uses a large
+    // If it's an old (1.0 or earlier) filesystem, it uses a "large"
     // filemap in the second page of the "file leader." If it's a
-    // new(er) filesystem, it uses a small filemap at an offset within
-    // the file leader, with the hints at the front. (The first page of
-    // the file leader is found at the "hint address" in its S-file
-    // entry, and its subsequent pages are only locatable via the label
-    // forward chain.)
+    // new(er) filesystem, it uses a "small" filemap at an offset within
+    // the file leader, with the hints at the front.
+    //
+    // The first page of the file leader is found at the "hint address"
+    // in its S-file entry, and any subsequent pages are only locatable
+    // via the label forward chain. It's unclear if leader_pages is
+    // actually used or affects any of this.
 
     bool oldfs = (image->fsversion <= release1);
 
@@ -1163,3 +1166,6 @@ int lisafs_iterate_directory_entries(lisafs_image * _Nonnull image,
 
     return 0;
 }
+
+
+LISAFS_SOURCE_END

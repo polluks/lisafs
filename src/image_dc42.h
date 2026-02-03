@@ -1,5 +1,5 @@
 //  image_dc42.h
-//	Part of LisaFilesystem.
+//	Part of lisafs.
 //
 //	Copyright © 2026 Christopher M. Hanson. All rights reserved.
 //  See file COPYING for details.
@@ -7,8 +7,7 @@
 #ifndef __IMAGE_DC42__H__
 #define __IMAGE_DC42__H__
 
-#include "lisafs_defines.h"
-
+#include <stdint.h>
 #include <stdlib.h>
 
 
@@ -49,7 +48,7 @@ typedef struct image_dc42_header image_dc42_header;
 
 
 /*!
-    A DiskCopy 4.2 image. While the image is open, its file is valid.
+    A DiskCopy 4.2 image.
  */
 struct image_dc42;
 typedef struct image_dc42 image_dc42;

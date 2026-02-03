@@ -1,5 +1,5 @@
 //  lisafs.h
-//	Part of LisaFilesystem.
+//	Part of lisafs.
 //
 //	Copyright © 2026 Christopher M. Hanson. All rights reserved.
 //  See file COPYING for details.
@@ -11,6 +11,9 @@
 
 #include <stdlib.h>
 #include <time.h>
+
+
+LISAFS_HEADER_BEGIN
 
 
 // MARK: - Types and Structures
@@ -44,11 +47,15 @@ typedef int16_t lisafs_fileid;
 /*! A B-Tree node ID. */
 typedef int16_t lisafs_nodeid;
 
+#define LISAFS_LABEL_SIZE	24
+
 /*! A raw Lisa filesystem tag. */
-typedef uint8_t lisafs_tag[24];
+typedef uint8_t lisafs_label[LISAFS_LABEL_SIZE];
+
+#define LISAFS_BLOCK_SIZE    512
 
 /*! A raw Lisa fileystem block. */
-typedef uint8_t lisafs_block[512];
+typedef uint8_t lisafs_block[LISAFS_BLOCK_SIZE];
 
 
 /*!
@@ -127,13 +134,19 @@ enum lisafs_fsversion : int16_t {
 };
 typedef enum lisafs_fsversion lisafs_fsversion;
 
-const char * _Nonnull lisafs_fsversion_string(lisafs_fsversion version);
+/*!
+    Get the string equivalent of the given version. This does not need
+    to be freed by the caller.
+
+    - WARNING: Not reentrant.
+ */
+LISAFS_EXTERN const char * _Nonnull lisafs_fsversion_string(lisafs_fsversion version);
 
 
 /*!
     The different mount states that a volume can have.
  */
-enum lisafs_mountstate : int16_t {
+enum lisafs_mountstate : int8_t {
     unmounted,
     temp_unmounted,
     defmounted,
@@ -198,6 +211,7 @@ struct lisafs_mddf {
     lisafs_fileid           rootsnum;
     lisafs_integer          rootmaxentries;
     lisafs_mountstate       mountinfo;
+    lisafs_byte             mountinfo_pad;
     lisafs_uid              overmount_stamp;
     lisafs_longint          pmem_id;
     lisafs_integer          pmem[32];
@@ -230,7 +244,10 @@ typedef struct lisafs_mddf lisafs_mddf;
 
 
 /*!
-    A small file entry.
+    A "small file" entry. It's interesting that they were called this
+    when the filesize limit was effectively 2GB, as long as enough
+    contiguous space was available that the file's extents didn't
+    overflow the filemap.
  */
 struct lisafs_s_entry {
     lisafs_paddr    hintaddr;
@@ -268,7 +285,9 @@ typedef enum lisafs_filetype lisafs_filetype;
 const char * _Nullable lisafs_filetype_string(lisafs_filetype t);
 
 
-/*! Lisa build control record. */
+/*!
+    Lisa "build control" record.
+ */
 struct lisafs_build_control {
     lisafs_integer  release_number;         //!< public release number
     lisafs_integer  build_number;           //!< internal build membership
@@ -477,7 +496,6 @@ typedef struct lisafs_centry lisafs_centry;
 /*!
     A Lisa filesystem image. The contents are private.
  */
-//struct lisafs_image;
 typedef struct lisafs_image lisafs_image;
 
 
@@ -527,7 +545,7 @@ const char * _Nonnull lisafs_get_password(lisafs_image * _Nonnull image);
 int lisafs_read_block(lisafs_image * _Nonnull image,
                       lisafs_baddr n,
                       lisafs_block _Nonnull block,
-                      lisafs_tag _Nonnull tag);
+                      lisafs_label _Nonnull label);
 
 /*!
     Read both the data and label of page n from the given Lisa disk
@@ -605,6 +623,9 @@ typedef int (*lisafs_directory_entry_iterator)(lisafs_centry * _Nonnull entry,
 int lisafs_iterate_directory_entries(lisafs_image * _Nonnull image,
                                      lisafs_directory_entry_iterator _Nonnull iterator,
                                      void * _Nullable context);
+
+
+LISAFS_HEADER_END
 
 
 #endif /* __LISAFS__H__ */

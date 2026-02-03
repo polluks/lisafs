@@ -1,5 +1,5 @@
 #	Makefile
-#	Part of LisaFilesystem.
+#	Part of lisafs.
 #
 #	Copyright © 2026 Christopher M. Hanson. All rights reserved.
 #   See file COPYING for details.
@@ -37,8 +37,10 @@ CFLAGS = \
 	$(WARNING_CFLAGS) \
 	$(HEADER_SEARCH_PATHS)
 
-PREPROCESSOR_MACROS_Debug   = -DDEBUG=1
-PREPROCESSOR_MACROS_Release = -DNDEBUG=1
+LISAFS_ENABLE_DEV_COMMANDS = -DLISAFS_ENABLE_DEV_COMMANDS=1
+
+PREPROCESSOR_MACROS_Debug   = -DDEBUG=1  $(LISAFS_ENABLE_DEV_COMMANDS)
+PREPROCESSOR_MACROS_Release = -DNDEBUG=1 $(LISAFS_ENABLE_DEV_COMMANDS)
 PREPROCESSOR_MACROS = $(PREPROCESSOR_MACROS_$(CONFIGURATION))
 
 CPPFLAGS = $(PREPROCESSOR_MACROS)
@@ -49,8 +51,10 @@ CPPFLAGS = $(PREPROCESSOR_MACROS)
 OBJECTS = \
 	$(OBJDIR)/image_dc42.o \
 	$(OBJDIR)/io_utils.o \
+	$(OBJDIR)/lisafs.o \
+	$(OBJDIR)/lisafs_commands.o \
+	$(OBJDIR)/lisafs_dev_commands.o \
 	$(OBJDIR)/lisafs_main.o \
-	$(OBJDIR)/lisafs.o
 
 
 ### Build Rules
@@ -83,15 +87,28 @@ $(OBJDIR):
 ### File Dependencies
 
 src/image_dc42.c: src/image_dc42.h \
-				  src/lisafs_defines.h
+                  src/endian_utils.h
 
 src/io_utils.c: src/io_utils.h \
-				src/lisafs_defines.h
-
-src/lisafs_main.c: src/lisafs.h \
-				   src/lisafs_defines.h \
-				   src/image_dc42.h
+                src/endian_utils.h
 
 src/lisafs.c: src/lisafs.h \
-			  src/lisafs_defines.h \
-			  src/image_dc42.h
+              src/lisafs_defines.h \
+              src/endian_utils.h \
+              src/image_dc42.h
+
+src/lisafs_commands.c: src/lisafs_commands.h \
+                       src/lisafs_main.h \
+                       src/lisafs_defines.h \
+                       src/lisafs.h
+
+src/lisafs_dev_commands.c: src/lisafs_dev_commands.h \
+                           src/lisafs_main.h \
+                           src/lisafs_defines.h \
+                           src/lisafs.h
+
+src/lisafs_main.c: src/lisafs_main.h \
+                   src/lisafs_defines.h \
+                   src/lisafs.h \
+                   src/lisafs_commands.h \
+                   src/lisafs_dev_commands.h

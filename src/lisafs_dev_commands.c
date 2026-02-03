@@ -1,0 +1,472 @@
+//  lisafs_dev_commands.h
+//  Part of lisafs.
+//
+//  Copyright © 2026 Christopher M. Hanson. All rights reserved.
+//  See file COPYING for details.
+
+#include "lisafs_dev_commands.h"
+
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <sysexits.h>
+
+#include "image_dc42.h"
+#include "lisafs_main.h"
+
+
+LISAFS_SOURCE_BEGIN
+
+
+void print_hex_bytes_line(const uint8_t * const bytes, size_t n);
+const char *boolstr(lisafs_boolean b);
+
+
+// MARK: - Utilities
+
+#define OFFSET(a,b) ((void *)&(a->b) - (void *)a)
+
+const char *boolstr(lisafs_boolean b)
+{
+    if (b) return "TRUE";
+    else return "FALSE";
+}
+
+void print_hex_bytes_line(const uint8_t * const bytes, size_t n)
+{
+    assert(n <= 16);
+
+    // Print hex (and pad if necessary)
+
+    for (size_t i = 0; i < n; i++) {
+        fprintf(stdout, "%02x ", bytes[i]);
+    }
+
+    if (n < 16) {
+        for (size_t i = 0; i < (16 - n); i++) {
+            fprintf(stdout, "   ");
+        }
+    }
+
+    // Print divider
+
+    fprintf(stdout, "| ");
+
+    // Print text
+
+    for (size_t i = 0; i < n; i++) {
+        char ch = (isascii(bytes[i]) && isprint(bytes[i])) ? bytes[i] : '.';
+        fprintf(stdout, "%c", ch);
+    }
+
+    // Print trailing newline.
+
+    fprintf(stdout, "\n");
+}
+
+
+// MARK: - dumpblock command
+
+int lisafs_dumpblock(int argc, char * _Nullable * _Nonnull argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "%s: dumpblock: insufficient arguments" "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
+
+    long n = atol(argv[1]);
+    if ((n > INT32_MAX) || (n < INT32_MIN)) {
+        fprintf(stderr, "%s: dumpblock: invalid argument %ld outside 32-bit integer range" "\n",
+                program_name, n);
+        return EX_USAGE;
+    }
+
+    // Read the block and its tag.
+
+    uint8_t block[512] = {0};
+    uint8_t tag[12] = {0};
+
+    int read_block_err = lisafs_read_block(image, (int32_t)n, block, tag);
+    if (read_block_err != 0) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error reading image '%s' block %ld: %s" "\n",
+                program_name, image_file_path, n, errstr);
+        print_usage();
+        return EX_DATAERR;
+    }
+
+    // Produce formatted hex output.
+
+    fprintf(stdout, "Block:\t" "%ld" "\n", n);
+    fprintf(stdout, "Tag:\t");
+    print_hex_bytes_line(tag, 12);
+    fprintf(stdout, "Data:"          "\n");
+
+    for (int b = 0; b < 0x200; b += 16) {
+        fprintf(stdout, "%04x:\t", b);
+        print_hex_bytes_line(&block[b], 16);
+    }
+
+    return EX_OK;
+}
+
+
+// MARK: - dumppage command
+
+int lisafs_dumppage(int argc, char * _Nullable * _Nonnull argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "%s: dumppage: insufficient arguments" "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
+
+    long n = atol(argv[1]);
+    if ((n > INT32_MAX) || (n < INT32_MIN)) {
+        fprintf(stderr, "%s: dumppage: invalid argument %ld outside 32-bit integer range" "\n",
+                program_name, n);
+        return EX_USAGE;
+    }
+
+    // Read the page and its label.
+
+    lisafs_page page = {0};
+
+    int read_page_err = lisafs_read_page(image, (int32_t)n, &page);
+    if (read_page_err != 0) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error reading image '%s' block %ld: %s" "\n",
+                program_name, image_file_path, n, errstr);
+        print_usage();
+        return EX_DATAERR;
+    }
+
+    // Pretty-print the label.
+
+    fprintf(stdout, "Page:\t"       "%ld"   "\n", n);
+    fprintf(stdout, "Label:"                "\n");
+    fprintf(stdout, "  version:\t"  "%hd"   "\n", page.label.version);
+    fprintf(stdout, "  flags:\t"    "0x%04hx" "\n", page.label.flags);
+    fprintf(stdout, "  fileid:\t"   "%hd"   "\n", page.label.fileid);
+    fprintf(stdout, "  dataused:\t" "%hd"   "\n", page.label.dataused);
+    fprintf(stdout, "  abspage:\t"  "%d"    "\n", page.label.abspage);
+    fprintf(stdout, "  relpage:\t"  "%d"    "\n", page.label.relpage);
+    fprintf(stdout, "  fwdlink:\t"  "%d"    "\n", page.label.fwdlink);
+    fprintf(stdout, "  bkwdlink:\t" "%d"    "\n", page.label.bkwdlink);
+
+    // Produce formatted hex output.
+
+    fprintf(stdout, "Data:" "\n");
+
+    for (int b = 0; b < 512; b += 16) {
+        fprintf(stdout, "%04x:\t", b);
+        print_hex_bytes_line(&page.data[b], 16);
+    }
+
+    return EX_OK;
+}
+
+
+// MARK: - fsinfo command
+
+int lisafs_fsinfo(int argc, char * _Nullable * _Nonnull argv)
+{
+    lisafs_mf_loader_loader_header *header = lisafs_get_loader_header(image);
+    assert(header != NULL);
+
+#define DEFPRINT(s,m, f) \
+    fprintf(stdout, "" #m ":\t" f " (%td)" "\n", s->m, OFFSET(s, m))
+
+    fprintf(stdout, "*** Loader Loader Header (block 0)" "\n");
+    fprintf(stdout, "JMP:\t\t"          "0x%08x (%td)"  "\n", header->jmp, OFFSET(header, jmp));
+    fprintf(stdout, "Boot ID:\t"        "0x%04hx (%td)" "\n", header->boot_id, OFFSET(header, boot_id));
+    fprintf(stdout, "Loader Vers:\t"    "0x%04hx (%td)" "\n", header->ldr_version, OFFSET(header, ldr_version));
+    fprintf(stdout, "Global Size:\t"    "0x%04hx (%td)" "\n", header->globalsize, OFFSET(header, globalsize));
+    fprintf(stdout, "Code Size:\t"      "0x%04hx (%td)" "\n", header->codesize, OFFSET(header, codesize));
+    fprintf(stdout, "PC Offset:\t"      "0x%04hx (%td)" "\n", header->pc_offset, OFFSET(header, pc_offset));
+    fprintf(stdout, "Block 0 Offset:\t" "%d (%td)"      "\n", header->fs_block0, OFFSET(header, fs_block0));
+    fprintf(stdout, "\n");
+
+    lisafs_mddf *mddf = lisafs_get_mddf(image);
+    assert(mddf != NULL);
+
+    fprintf(stdout, "*** Media Description Data File (block %d)" "\n", header->fs_block0);
+    fprintf(stdout, "Version:\t\t"          "%s (%td)" "\n", lisafs_fsversion_string(mddf->fsversion), OFFSET(mddf, fsversion));
+    fprintf(stdout, "Volume ID:\t\t"        "0x%08x:%08x (%td)""\n", mddf->volid.a, mddf->volid.b, OFFSET(mddf, volid));
+    fprintf(stdout, "Volume Number:\t\t"    "0x%04hx (%td)" "\n", mddf->volnum, OFFSET(mddf, volnum));
+    fprintf(stdout, "Volume Name:\t\t"      "'%s' (%td)" "\n", lisafs_get_volname(image), OFFSET(mddf, volname));
+    fprintf(stdout, "Volume Password:\t"    "'%s' (%td)" "\n", lisafs_get_password(image), OFFSET(mddf, password));
+    DEFPRINT(mddf, init_machine_id, "%d");
+    DEFPRINT(mddf, master_machine_id, "%d");
+    fprintf(stdout, "Date Created:\t\t"     "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_created), OFFSET(mddf, DT_created));
+    fprintf(stdout, "Date Copy Created:\t"  "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_copy_created), OFFSET(mddf, DT_copy_created));
+    fprintf(stdout, "Date Copied:\t\t"      "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_copied), OFFSET(mddf, DT_copied));
+    fprintf(stdout, "Date Scavenged:\t\t"   "%s (%td)" "\n", lisafs_timestamp_string(mddf->DT_scavenged), OFFSET(mddf, DT_scavenged));
+    DEFPRINT(mddf, copy_thread, "%d");
+    DEFPRINT(mddf, firstblock, "%d");
+    DEFPRINT(mddf, lastblock, "%d");
+    DEFPRINT(mddf, lastfspage, "%d");
+    DEFPRINT(mddf, blockcount, "%d");
+    DEFPRINT(mddf, blocksize, "%hd");
+    DEFPRINT(mddf, datasize, "%hd");
+    DEFPRINT(mddf, cluster_size, "%hd");
+    fprintf(stdout, "MDDF Address:\t\t"     "%u (%td)" "\n", mddf->MDDFaddr, OFFSET(mddf, MDDFaddr));
+    fprintf(stdout, "MDDF Size:\t\t"        "%hu (%td)" "\n", mddf->MDDFsize, OFFSET(mddf, MDDFsize));
+    fprintf(stdout, "Bitmap Address:\t\t"   "%u (%td)" "\n", mddf->bitmap_addr, OFFSET(mddf, bitmap_addr));
+    fprintf(stdout, "Bitmap Size:\t\t"      "%u bits (%td)" "\n", mddf->bitmap_size, OFFSET(mddf, bitmap_size));
+    fprintf(stdout, "Bitmap Bytes:\t\t"     "%hu (%td)" "\n", mddf->bitmap_bytes, OFFSET(mddf, bitmap_bytes));
+    fprintf(stdout, "Bitmap Pages:\t\t"     "%hu (%td)" "\n", mddf->bitmap_pages, OFFSET(mddf, bitmap_pages));
+    fprintf(stdout, "S-list Address:\t\t"   "%u (%td)" "\n", mddf->slist_addr, OFFSET(mddf, slist_addr));
+    fprintf(stdout, "S-list Packing:\t\t"   "%hu (%td)" "\n", mddf->slist_packing, OFFSET(mddf, slist_packing));
+    fprintf(stdout, "S-list Blocks:\t\t"    "%hu (%td)" "\n", mddf->slist_block_count, OFFSET(mddf, slist_block_count));
+    fprintf(stdout, "First File:\t\t"       "%hu (%td)" "\n", mddf->first_file, OFFSET(mddf, first_file));
+    fprintf(stdout, "Empty File:\t\t"       "%hu (%td)" "\n", mddf->empty_file, OFFSET(mddf, empty_file));
+    fprintf(stdout, "Max Files:\t\t"        "%hu (%td)" "\n", mddf->maxfiles, OFFSET(mddf, maxfiles));
+    DEFPRINT(mddf, hintsize, "%hd");
+    DEFPRINT(mddf, leader_offset, "%hd");
+    DEFPRINT(mddf, leader_pages, "%hd");
+    DEFPRINT(mddf, flabel_offset, "%hd");
+    DEFPRINT(mddf, unusedi1, "%hd");
+    DEFPRINT(mddf, map_offset, "%hd");
+    DEFPRINT(mddf, map_size, "%hd");
+    fprintf(stdout, "File Count:\t\t"       "%hu (%td)" "\n", mddf->filecount, OFFSET(mddf, filecount));
+    DEFPRINT(mddf, freestart, "%d");
+    DEFPRINT(mddf, unusedl1, "%d");
+    DEFPRINT(mddf, freecount, "%d");
+    fprintf(stdout, "Root S-file:\t\t"      "%hu (%td)" "\n", mddf->rootsnum, OFFSET(mddf, rootsnum));
+    fprintf(stdout, "Root Maximum:\t\t"     "%hu entries (%td)" "\n", mddf->rootmaxentries, OFFSET(mddf, rootmaxentries));
+    DEFPRINT(mddf, mountinfo, "%hd");
+    fprintf(stdout, "Overmount Stamp:\t"    "0x%08x:%08x (%td)""\n", mddf->overmount_stamp.a, mddf->overmount_stamp.b, OFFSET(mddf, overmount_stamp));
+    fprintf(stdout, "Pmem Machine ID:\t"    "%d (%td)" "\n", mddf->pmem_id, OFFSET(mddf, pmem_id));
+    for (int i = 0; i < 32; i++) {
+        if ((i % 8) == 0) fprintf(stdout, "pmem[%d]:\t\t", i);
+        fprintf(stdout, "0x%04hx ", mddf->pmem[i]);
+        if ((i % 8) == 7) fprintf(stdout, "(%td)\n", OFFSET(mddf, pmem[i - 7]));
+    }
+    DEFPRINT(mddf, vol_scavenged, "%hd");
+    DEFPRINT(mddf, tbt_copied, "%hd");
+    DEFPRINT(mddf, smallmap_offset, "%hd");
+    DEFPRINT(mddf, hentry_offset, "%hd");
+    fprintf(stdout, "Backup Volume ID:\t"   "0x%08x:%08x (%td)""\n", mddf->backup_volid.a, mddf->backup_volid.b, OFFSET(mddf, backup_volid));
+    DEFPRINT(mddf, flabel_size, "%hd");
+    DEFPRINT(mddf, fs_overhead, "%hd");
+    DEFPRINT(mddf, result_scavenge, "%hd");
+    DEFPRINT(mddf, boot_code, "%hd");
+    DEFPRINT(mddf, boot_environ, "%hd");
+    DEFPRINT(mddf, oem_id, "%d");
+    DEFPRINT(mddf, root_page, "%d");
+    DEFPRINT(mddf, tree_depth, "%hd");
+    DEFPRINT(mddf, node_id, "%hd");
+    DEFPRINT(mddf, vol_seq_no, "%hd");
+    DEFPRINT(mddf, vol_mounted, "%hd");
+
+#undef DEFPRINT
+
+    return EX_OK;
+}
+
+
+// MARK: - imageinfo command
+
+int lisafs_imageinfo(int argc, char * _Nullable * _Nonnull argv)
+{
+    image_dc42 *raw_image = lisafs_get_raw_image(image);
+    assert(raw_image != NULL);
+
+    image_dc42_header *header = image_dc42_get_header(raw_image);
+    assert(header != NULL);
+
+    const char * const name = image_dc42_get_name(raw_image);
+    assert(name != NULL);
+
+    fprintf(stdout, "Name:\t\t"     "'%s'" "\n", name);
+    fprintf(stdout, "Type:\t\t"     "DiskCopy 4.2" "\n");
+    fprintf(stdout, "Data size:\t"  "%u (%u)" "\n", header->data_size, header->data_size / 512);
+    fprintf(stdout, "Tag size:\t"   "%u (%u)" "\n", header->tag_size, header->tag_size / 12);
+    fprintf(stdout, "Encoding:\t"   "%s" "\n", image_dc42_get_encoding_name(header->encoding));
+    fprintf(stdout, "Format:\t\t"   "0x%02x" "\n", header->format.gcr);
+    fprintf(stdout, "Magic:\t\t"    "0x%04x" "\n", header->magic_number);
+
+    return EX_OK;
+}
+
+
+// MARK: - sfextract command
+
+int lisafs_sfextract(int argc, char * _Nullable * _Nonnull argv)
+{
+    void *buf = NULL;
+
+    if (argc < 2) {
+        fprintf(stderr, "%s: sfextract: insufficient arguments" "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
+
+    long input_fileid = atol(argv[1]);
+    if ((input_fileid < 0) || (input_fileid > 32767)) {
+        fprintf(stderr, "%s: sfextract: invalid file ID %ld" "\n", program_name, input_fileid);
+        print_usage();
+        return EX_USAGE;
+    }
+    const lisafs_fileid fileid = input_fileid;
+
+    lisafs_mddf *mddf = lisafs_get_mddf(image);
+    assert(mddf != NULL);
+
+    // Ask for the S-file hints and contents requested by the user.
+
+    lisafs_hentry hints;
+    int read_hints = lisafs_read_sfile_hints(image, fileid, &hints);
+    if (read_hints == -1) goto error;
+
+    lisafs_longint size = lisafs_get_sfile_size(image, fileid);
+    if (size == -1) goto error;
+
+    buf = calloc(size, 1);
+    if (buf == NULL) goto error;
+
+    int read_file = lisafs_read_sfile(image, fileid, buf, size);
+    if (read_file == -1) goto error;
+
+    // Create the output file with the same name as the requested S-file,
+    // after converting the name to be UNIX-compatible.
+
+    char name[33];
+    memset(name, 0, 33);
+    memcpy(name, &hints.name[1], hints.name[0]);
+
+    char *slash = strchr(name, '/');
+    while (slash != NULL) {
+        *slash = '-';
+        slash = strchr(slash, '/');
+    }
+
+    FILE *output = fopen(name, "wb");
+    if (output == NULL) goto error;
+
+    size_t items_written = fwrite(buf, size, 1, output);
+    if (items_written != 1) goto error;
+
+    fclose(output);
+
+    free(buf);
+    buf = NULL;
+
+    return EX_OK;
+
+error:
+    free(buf);
+    buf = NULL;
+
+    return EX_DATAERR;
+}
+
+
+// MARK: - sflist command
+
+int lisafs_sflist(int argc, char * _Nullable * _Nonnull argv)
+{
+    lisafs_mddf *mddf = lisafs_get_mddf(image);
+    if (mddf == NULL) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error reading MDDF from image '%s': %s" "\n",
+                program_name, image_file_path, errstr);
+        print_usage();
+        return EX_DATAERR;
+    }
+
+    bool detailed = false;
+    if (argc > 1) {
+        if (strncmp(argv[1], "-l", 2) == 0) detailed = true;
+    }
+
+    // Dump each S-file hint, in file ID order.
+
+    // For the release 3 filesystem dump to mddf->empty_file, otherwise
+    // dump to mddf->maxfiles and elide any empty entries. Similarly,
+    // for the release 3 filesystems start the dump at the first user
+    // file, while for earlier releases start at the catalog file.
+
+    lisafs_fileid first_file, last_file;
+    if (mddf->fsversion == release3) {
+        first_file = LISAFS_FIRSTUSER_SF;
+        last_file = mddf->empty_file - 1;
+    } else {
+        first_file = LISAFS_ROOTDIR_SNUM;
+        last_file = mddf->maxfiles - 1;
+    }
+
+    for (lisafs_fileid i = first_file; i <= last_file; i++) {
+
+        // Since the S-file list is sparse prior to release 3, skip
+        // any zero-sized files.
+
+        lisafs_longint size = lisafs_get_sfile_size(image, i);
+        if (size == 0) continue;
+
+        // What we're actually printing is in the "hints."
+
+        lisafs_hentry hentry;
+        int hentry_err = lisafs_read_sfile_hints(image, i, &hentry);
+        if (hentry_err == -1) goto error;
+
+        char name[33];
+        memset(name, 0, 33);
+        memcpy(name, &hentry.name[1], hentry.name[0]);
+
+        if (detailed) {
+            char password[9];
+            memset(password, 0, 9);
+            memcpy(password, &hentry.password[1], hentry.password[0]);
+
+            fprintf(stdout, "S-file:\t"     "%hd"   "\n", i);
+            fprintf(stdout, "name:\t"       "'%s'"  "\n", name);
+            // skip name_pad
+            fprintf(stdout, "UID:\t\t"      "0x%08x:%08x" "\n", hentry.UID.a, hentry.UID.b);
+            fprintf(stdout, "version:\t"    "%hd"   "\n", hentry.version);
+            fprintf(stdout, "type:\t\t"     "%s"    "\n", lisafs_filetype_string(hentry.ftype));
+            fprintf(stdout, "created:\t"    "%s"    "\n", lisafs_timestamp_string(hentry.date_created));
+            fprintf(stdout, "accessed:\t"   "%s"    "\n", lisafs_timestamp_string(hentry.date_accessed));
+            fprintf(stdout, "modified:\t"   "%s"    "\n", lisafs_timestamp_string(hentry.date_modified));
+            fprintf(stdout, "backed up:\t"  "%s"    "\n", lisafs_timestamp_string(hentry.date_backup));
+            fprintf(stdout, "scavenged:\t"  "%s"    "\n", lisafs_timestamp_string(hentry.date_scavenged));
+            fprintf(stdout, "machine ID:\t" "%d"    "\n", hentry.machine_id);
+            fprintf(stdout, "killed:\t\t"   "%s"    "\n", boolstr(hentry.killed));
+            fprintf(stdout, "safety:\t\t"   "%s"    "\n", boolstr(hentry.safety_on));
+            fprintf(stdout, "protected:\t"  "%s"    "\n", boolstr(hentry.protected));
+            fprintf(stdout, "master:\t\t"   "%s"    "\n", boolstr(hentry.master));
+            fprintf(stdout, "OS-close:\t"   "%s"    "\n", boolstr(hentry.close_by_OS));
+            fprintf(stdout, "open:\t\t"     "%s"    "\n", boolstr(hentry.file_open));
+            fprintf(stdout, "scav result:\t""%hd"   "\n", hentry.result_scavenge);
+            // skip unusedi1
+            fprintf(stdout, "system type:\t""%hd"   "\n", hentry.system_type);
+            fprintf(stdout, "user type:\t"  "%hd"   "\n", hentry.user_type);
+            fprintf(stdout, "& subtype:\t"  "%hd"   "\n", hentry.user_subtype);
+            fprintf(stdout, "bi.release:\t" "%hd"   "\n", hentry.build_info.release_number);
+            fprintf(stdout, "bi.build:\t"   "%hd"   "\n", hentry.build_info.build_number);
+            fprintf(stdout, "bi.compat:\t"  "%hd"   "\n", hentry.build_info.compatibility_level);
+            fprintf(stdout, "bi.revision:\t""%hd"   "\n", hentry.build_info.revision_level);
+            fprintf(stdout, "file part:\t"  "%hd"   "\n", hentry.file_portion);
+            fprintf(stdout, "password:\t"   "'%s'"  "\n", password);
+            // skip password-pad
+            fprintf(stdout, "parent ID:\t"  "%hd"   "\n", hentry.parentID);
+            fprintf(stdout, "FS overhead:\t""%hd"   "\n", hentry.fsOverhead);
+
+            fprintf(stdout, "\n");
+        } else {
+            fprintf(stdout, "%d:\t'%s'" "\n", i, name);
+        }
+    }
+
+    return EX_OK;
+
+error:
+    return EX_DATAERR;
+}
+
+
+LISAFS_SOURCE_END
