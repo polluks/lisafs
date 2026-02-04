@@ -433,26 +433,6 @@ struct lisafs_threadrec {
 } LISAFS_PACKED;
 typedef struct lisafs_threadrec lisafs_threadrec;
 
-/*! Types of B-tree nodes. */
-enum lisafs_nodekind: int8_t {
-    leaf = 0,
-    nonleaf = 1,
-};
-typedef enum lisafs_nodekind lisafs_nodekind;
-
-/*!
-    A Lisa B-Tree node descriptor, stored in the last 12 bytes of a 2KB
-    B-tree page.
-*/
-struct lisafs_nodedesc {
-    lisafs_integer nkeys;
-    lisafs_paddr prior;
-    lisafs_paddr next;
-    lisafs_nodekind kind;
-    lisafs_byte cksum;
-} LISAFS_PACKED;
-typedef struct lisafs_nodedesc lisafs_nodedesc;
-
 /*! A runtime representation of a Lisa directory entry. */
 union lisafs_directory_entry {
     lisafs_btentryheader header_only;
@@ -461,21 +441,6 @@ union lisafs_directory_entry {
     lisafs_threadrec thread;
 };
 typedef union lisafs_directory_entry lisafs_directory_entry;
-
-/*! The size in bytes of a B-tree page. */
-#define LISAFS_BTREE_PAGE_SIZE	2048
-
-/*! A runtime representation of a Lisa B-tree page. */
-struct lisafs_btree_page {
-    uint8_t raw_data[LISAFS_BTREE_PAGE_SIZE];
-    lisafs_nodedesc node;
-    lisafs_integer entry_offset;
-    lisafs_paddr children_paddr;
-    lisafs_directory_entry * _Nonnull entries;
-    struct lisafs_btree_page * _Nullable * _Nullable children;
-};
-typedef struct lisafs_btree_page lisafs_btree_page;
-
 
 /*! A catalog entry used on pre-3.0 filesystems. */
 struct lisafs_centry {
@@ -657,6 +622,14 @@ lisafs_path_from_string(const char *string);
 LISAFS_EXTERN
 void
 lisafs_path_free(lisafs_path * _Nullable path);
+
+/*!
+    Look up and return the sfile for the filesystem object at the given
+    path, returning -1 if not found.
+ */
+LISAFS_EXTERN
+lisafs_fileid
+lisafs_lookup_sfile(lisafs_image *image, lisafs_path *path);
 
 
 LISAFS_HEADER_END

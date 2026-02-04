@@ -15,6 +15,7 @@
 LISAFS_HEADER_BEGIN
 
 
+int lisafs_extract(int argc, char * _Nullable * _Nonnull argv);
 int lisafs_list(int argc, char * _Nullable * _Nonnull argv);
 
 

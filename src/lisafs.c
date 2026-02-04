@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,14 +44,59 @@ struct lisafs_image {
     //! An array of `maxfiles` entries, cached from the image.
     lisafs_s_entry * _Nullable sfiles;
 
-    //! The root of the catalog B-tree.
+    //! The entries in the catalog B-tree.
     //! - NOTE: Release 3.0 only.
-    lisafs_btree_page * _Nullable btree_root;
+    lisafs_directory_entry * _Nullable dentries;
+
+    //! The number of entries in the catalog B-tree.
+    //! - NOTE: Release 3.0 only.
+    lisafs_integer dentries_count;
 
     //! An array of `maxfiles` entries, cached from the image.
     //! - NOTE: Only prior to release 3.0.
     lisafs_centry * _Nullable centries;
 };
+
+/*! Types of B-tree nodes. */
+enum lisafs_nodekind: int8_t {
+    leaf = 0,
+    nonleaf = 1,
+};
+typedef enum lisafs_nodekind lisafs_nodekind;
+
+/*!
+    A Lisa B-Tree node descriptor, stored in the last 12 bytes of a 2KB
+    B-tree page.
+*/
+struct lisafs_nodedesc {
+    lisafs_integer nkeys;
+    lisafs_paddr prior;
+    lisafs_paddr next;
+    lisafs_nodekind kind;
+    lisafs_byte cksum;
+} LISAFS_PACKED;
+typedef struct lisafs_nodedesc lisafs_nodedesc;
+
+/*! The size in bytes of a B-tree page. */
+#define LISAFS_BTREE_PAGE_SIZE    2048
+
+/*! A runtime representation of a Lisa B-tree page. */
+struct lisafs_btree_page {
+    uint8_t raw_data[LISAFS_BTREE_PAGE_SIZE];
+    lisafs_nodedesc node;
+    lisafs_integer entry_offset;
+    lisafs_paddr children_paddr;
+    lisafs_directory_entry * _Nonnull entries;
+    struct lisafs_btree_page * _Nullable * _Nullable children;
+};
+typedef struct lisafs_btree_page lisafs_btree_page;
+
+
+
+
+int lisafs_iterate_page_entries(lisafs_btree_page *page,
+                                lisafs_btree_entry_iterator iterator,
+                                void * _Nullable context);
 
 
 time_t lisafs_timestamp_to_time_t(lisafs_timestamp timestamp)
@@ -383,9 +429,13 @@ void lisafs_free_btree_page(lisafs_btree_page * _Nullable page)
  */
 void lisafs_process_btree_entry(lisafs_directory_entry *raw_entry, lisafs_directory_entry *entry)
 {
-    memcpy(&entry->header_only.key, &raw_entry->header_only.key, 36);
-    entry->header_only.etype      =  raw_entry->header_only.etype;
-    entry->header_only.etype_pad  =  raw_entry->header_only.etype_pad;
+    lisafs_key *entry_key = &entry->header_only.key;
+
+    entry_key->key_length        =        raw_entry->header_only.key.key_length;
+    entry_key->parent_id         = swap16(raw_entry->header_only.key.parent_id);
+    memcpy(entry_key->name,               raw_entry->header_only.key.name, 33);
+    entry->header_only.etype     =        raw_entry->header_only.etype;
+    entry->header_only.etype_pad =        raw_entry->header_only.etype_pad;
 
     switch (entry->header_only.etype) {
         case emptyentry:
@@ -432,10 +482,13 @@ void lisafs_process_btree_entry(lisafs_directory_entry *raw_entry, lisafs_direct
 
 /*!
     Get a processed copy of the B-tree page that starts at the given disk
-    page address, or return `NULL` and set `errno` on failure.
+    page address, or return `NULL` and set `errno` on failure. The total
+    number of entries in the B-tree will also be returned.
  */
-lisafs_btree_page * _Nullable lisafs_copy_btree_pages(lisafs_image * _Nonnull image,
-                                                     lisafs_paddr paddr)
+lisafs_btree_page * _Nullable
+lisafs_copy_btree_pages(lisafs_image * image,
+                        lisafs_paddr paddr,
+                        lisafs_integer *entry_count)
 {
     assert(paddr > 0);
 
@@ -485,6 +538,8 @@ lisafs_btree_page * _Nullable lisafs_copy_btree_pages(lisafs_image * _Nonnull im
         goto error;
     }
 
+    lisafs_integer subtree_entry_count = node->nkeys;
+
     for (int i = 0; i < node->nkeys; i++) {
         const int entry_offset_offset = lisafs_btree_entry_offset_offset(i);
         const lisafs_integer *entry_offset_ptr = (lisafs_integer *) &page->raw_data[entry_offset_offset];
@@ -507,15 +562,19 @@ lisafs_btree_page * _Nullable lisafs_copy_btree_pages(lisafs_image * _Nonnull im
 
         lisafs_paddr child_paddr = page->children_paddr;
         for (int i = 0; i < node->nkeys; i++) {
-            page->children[i] = lisafs_copy_btree_pages(image, child_paddr);
+            lisafs_integer child_entry_count = 0;
+            page->children[i] = lisafs_copy_btree_pages(image, child_paddr, &child_entry_count);
             if (page->children[i] == NULL) {
                 errno = ENOMEM;
                 goto error;
             }
 
+            subtree_entry_count += child_entry_count;
             child_paddr = page->children[i]->node.next;
         }
     }
+
+    *entry_count = subtree_entry_count;
 
     return page;
 
@@ -524,6 +583,23 @@ error:
     return NULL;
 }
 
+struct lisafs_cache_btree_context {
+    lisafs_directory_entry *dentries;
+    lisafs_integer dentries_cur;
+    lisafs_integer dentries_max;
+};
+
+int lisafs_cache_btree_iterator(lisafs_directory_entry *entry, void * _Nullable vcontext)
+{
+    struct lisafs_cache_btree_context *context = vcontext;
+    assert(context != NULL);
+    assert(context->dentries_cur < context->dentries_max);
+
+    memcpy(&context->dentries[context->dentries_cur], entry, sizeof(lisafs_directory_entry));
+    context->dentries_cur += 1;
+
+    return 0;
+}
 
 int lisafs_cache_btree(lisafs_image * _Nonnull image)
 {
@@ -531,17 +607,55 @@ int lisafs_cache_btree(lisafs_image * _Nonnull image)
 
     // Pull the entire B-tree into memory.
 
-    image->btree_root = lisafs_copy_btree_pages(image, image->mddf.root_page);
-    if (image->btree_root == NULL) {
+    lisafs_btree_page *btree_root = NULL;
+    lisafs_integer total_entry_count = 0;
+    btree_root = lisafs_copy_btree_pages(image, image->mddf.root_page,
+                                         &total_entry_count);
+    if (btree_root == NULL) {
         errno = ENOMEM;
         goto error;
     }
 
+    if (total_entry_count == 0) {
+        errno = ENOENT;
+        goto error;
+    }
+
+    // Now create an array of directory entries from the B-tree.
+
+    image->dentries = calloc(sizeof(lisafs_directory_entry), total_entry_count);
+    if (image->dentries == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    image->dentries_count = total_entry_count;
+
+    struct lisafs_cache_btree_context context;
+    context.dentries = image->dentries;
+    context.dentries_cur = 0;
+    context.dentries_max = image->dentries_count;
+
+    int iterate_err = lisafs_iterate_page_entries(btree_root, lisafs_cache_btree_iterator, &context);
+    if (iterate_err == -1) {
+        errno = ESRCH;
+        goto error;
+    }
+
+    // Clean up temporary memory.
+
+    lisafs_free_btree_page(btree_root);
+    btree_root = NULL;
+
     return 0;
 
+
 error:
-    lisafs_free_btree_page(image->btree_root);
-    image->btree_root = NULL;
+    lisafs_free_btree_page(btree_root);
+    btree_root = NULL;
+
+    free(image->dentries);
+    image->dentries = NULL;
 
     return -1;
 }
@@ -667,8 +781,8 @@ int lisafs_close(lisafs_image * _Nullable image)
     int savederrno = errno; // don't let the act of saving destroy errno
 
     if (image->fsversion == release3) {
-        lisafs_free_btree_page(image->btree_root);
-        image->btree_root = NULL;
+        free(image->dentries);
+        image->dentries = NULL;
     } else {
         free(image->centries);
         image->centries = NULL;
@@ -1100,8 +1214,8 @@ error:
 }
 
 
-int lisafs_iterate_page_entries(lisafs_btree_page * _Nonnull page,
-                                lisafs_btree_entry_iterator _Nonnull iterator,
+int lisafs_iterate_page_entries(lisafs_btree_page *page,
+                                lisafs_btree_entry_iterator iterator,
                                 void * _Nullable context)
 {
     if (page->node.kind == nonleaf) {
@@ -1133,8 +1247,8 @@ int lisafs_iterate_page_entries(lisafs_btree_page * _Nonnull page,
 }
 
 
-int lisafs_iterate_btree_entries(lisafs_image * _Nonnull image,
-                                 lisafs_btree_entry_iterator _Nonnull iterator,
+int lisafs_iterate_btree_entries(lisafs_image *image,
+                                 lisafs_btree_entry_iterator iterator,
                                  void * _Nullable context)
 {
     if (image->fsversion != release3) {
@@ -1142,9 +1256,14 @@ int lisafs_iterate_btree_entries(lisafs_image * _Nonnull image,
         return -1;
     }
 
-    assert(image->btree_root != NULL);
+    assert(image->dentries != NULL);
 
-    return lisafs_iterate_page_entries(image->btree_root, iterator, context);
+    for (lisafs_integer i = 0; i < image->dentries_count; i++) {
+        int result = iterator(&image->dentries[i], context);
+        if (result != 0) return result;
+    }
+
+    return 0;
 }
 
 
@@ -1288,6 +1407,181 @@ lisafs_path_free(lisafs_path * _Nullable path)
     free(path);
 
     errno = savederrno;
+}
+
+/*!
+    Search the B-tree directory entries starting at \a start_dentry
+    first for the thread entry whose key's `parent_id` is \a parID
+    and then find the directory or file entry with the given \a name
+    after that *and* before the next thread entry or end of array.
+ */
+lisafs_integer
+lisafs_search_btree_from(lisafs_image *image, lisafs_integer start_dentry,
+                         lisafs_nodeid parID, const char *name)
+{
+    // First, look for the thread with the desired parent_id in its key.
+
+    lisafs_integer found_thread_index = -1;
+
+    for (lisafs_integer i = start_dentry;
+         i < image->dentries_count;
+         i++)
+    {
+        lisafs_directory_entry *entry = &image->dentries[i];
+        if (   (entry->header_only.etype == threadentry)
+            && (entry->header_only.key.parent_id == parID))
+        {
+            found_thread_index = i;
+            break;
+        }
+    }
+
+    if (found_thread_index == -1) return -1;
+
+    // Next, look for the directory or file entry after that point with
+    // the given name.
+
+    lisafs_integer found_dir_or_file_index = -1;
+
+    for (lisafs_integer j = found_thread_index + 1;
+         j < image->dentries_count;
+         j++)
+    {
+        lisafs_directory_entry *entry = &image->dentries[j];
+
+        if (   (entry->header_only.etype == fileentry)
+            || (entry->header_only.etype == direntry))
+        {
+            // Note that key.name is NOT a length-prefixed Pascal-style
+            // string, but a NUL-terminated C-style string! It's still
+            // 33 characters, but that's so it can always include the
+            // terminator...
+
+            char entry_name[33] = {0};
+            memcpy(entry_name, entry->header_only.key.name, 33);
+
+            if (strncasecmp(entry_name, name, 32) == 0) {
+                found_dir_or_file_index = j;
+                break;
+            }
+        } else if (entry->header_only.etype == threadentry) {
+            // We've come to the end of the directory.
+
+            break;
+        } else {
+            // Some other type of record, just skip it.
+        }
+    }
+
+    return found_dir_or_file_index;
+}
+
+lisafs_fileid
+lisafs_lookup_sfile_in_btree(lisafs_image *image, lisafs_path *path)
+{
+    assert(image->fsversion == release3);
+    assert(path->component_count > 0);
+
+    // Start the search at the root.
+
+    lisafs_integer cur_entry_index = 0;
+    lisafs_nodeid cur_parID = 0;
+
+    // The B-tree is structured such that each directory's entries get
+    // clustered into a series of records that starts with its thread
+    // record and ends with another directory's thread record or the
+    // overall end of the records. This allows path lookups to avoid
+    // having to backtrack.
+
+    for (int i = 0; i < path->component_count; i++) {
+        lisafs_integer entry_index = lisafs_search_btree_from(image, cur_entry_index,
+                                                              cur_parID, path->components[i]);
+        if (entry_index != -1) {
+            lisafs_directory_entry *entry = &image->dentries[entry_index];
+
+            if (i < (path->component_count - 1)) {
+                // If we're looking at intermediate path components,
+                // make sure the entry is a directory entry and switch
+                // cur_parID to its nodeID for the next iteration.
+                // Otherwise, fail with ENOTDIR.
+
+                if (entry->header_only.etype == direntry) {
+                    cur_parID = entry->directory.nodeID;
+                } else {
+                    errno = ENOTDIR;
+                    return -1;
+                }
+
+                // Start next search after this entry.
+
+                cur_entry_index = entry_index + 1;
+            } else {
+                // If we're looking at the final path component, it
+                // should be a file. If it is, return it. If it's not,
+                // fail with EISDIR.
+
+                if (entry->header_only.etype == fileentry) {
+                    return entry->object.sfile;
+                } else {
+                    errno = EISDIR;
+                    return -1;
+                }
+            }
+        }
+    }
+
+    errno = ENOENT;
+    return -1;
+}
+
+lisafs_fileid
+lisafs_lookup_sfile_in_directory(lisafs_image *image, lisafs_path *path)
+{
+    const char *name = path->components[0];
+
+    lisafs_centry *found = NULL;
+
+    for (lisafs_integer i = 0; i < image->maxfiles; i++) {
+        lisafs_centry *centry = &image->centries[i];
+
+        char centry_name[33] = { 0 };
+        memcpy(centry_name, &centry->name[1], centry->name[0]);
+
+        if (strncasecmp(name, centry_name, 32) == 0) {
+            found = centry;
+            break;
+        }
+    }
+
+    if (found) {
+        return found->sfile;
+    }
+
+    return -1;
+}
+
+lisafs_fileid
+lisafs_lookup_sfile(lisafs_image *image, lisafs_path *path)
+{
+    if (path->component_count < 1) {
+        errno = ENOENT;
+        goto exit;
+    }
+
+    if (image->fsversion == release3) {
+        return lisafs_lookup_sfile_in_btree(image, path);
+    } else {
+        // There must be only one path component.
+        if (path->component_count > 1) {
+            errno = ENOENT;
+            goto exit;
+        }
+
+        return lisafs_lookup_sfile_in_directory(image, path);
+    }
+
+exit:
+    return -1;
 }
 
 

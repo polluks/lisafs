@@ -17,6 +17,108 @@
 LISAFS_SOURCE_BEGIN
 
 
+// MARK: - extract command
+
+int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
+{
+    lisafs_path *lisa_path = NULL;
+    uint8_t *buf = NULL;
+    int err;
+
+    if (argc < 2) {
+        fprintf(stderr, "%s: insufficient arguments (%d)" "\n", program_name, argc);
+        print_usage();
+        err = EX_USAGE;
+        goto error;
+    }
+
+    char *path = argv[1];
+
+    lisa_path = lisafs_path_from_string(path);
+    if (lisa_path == NULL) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error decomposing path '%s': %s" "\n", program_name, path, errstr);
+        err = EX_DATAERR;
+        goto error;
+    }
+
+    lisafs_fileid lisa_file = lisafs_lookup_sfile(image, lisa_path);
+    if (lisa_file == -1) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error accessing file at path '%s': %s" "\n", program_name, path, errstr);
+        err = EX_NOINPUT;
+        goto error;
+    }
+
+    size_t buf_size = lisafs_get_sfile_size(image, lisa_file);
+    if (buf_size == -1) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error finding size of file at path '%s': %s" "\n", program_name, path, errstr);
+        err = EX_OSERR;
+        goto error;
+    }
+
+    buf = calloc(sizeof(uint8_t), buf_size);
+    if (buf == NULL) {
+        fprintf(stderr, "%s: cannot allocate %zd byte buffer for file at path '%s'" "\n", program_name, buf_size, path);
+        err = EX_OSERR;
+        goto error;
+    }
+
+    int read_err = lisafs_read_sfile(image, lisa_file, buf, buf_size);
+    if (read_err == -1) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error reading file at path '%s': %s" "\n", program_name, path, errstr);
+        err = EX_IOERR;
+        goto error;
+    }
+
+    char outname[33];
+    strncpy(outname, lisa_path->components[lisa_path->component_count - 1], 33);
+    char *slash = strchr(outname, '/');
+    while (slash != NULL) {
+        *slash = '-';
+        slash = strchr(&slash[1], '/');
+    }
+
+    FILE *outfile = fopen(outname, "wb");
+    if (outfile == NULL) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error opening output file '%s': %s" "\n", program_name, outname, errstr);
+        err = EX_CANTCREAT;
+        goto error;
+    }
+
+    size_t items_written = fwrite(buf, buf_size, 1, outfile);
+    if (items_written != 1) {
+        const char *errstr = strerror(errno);
+        fprintf(stderr, "%s: error writing output file '%s': %s" "\n", program_name, outname, errstr);
+        err = EX_IOERR;
+        goto error;
+    }
+
+    fclose(outfile);
+    outfile = NULL;
+
+    lisafs_path_free(lisa_path);
+    lisa_path = NULL;
+
+    free(buf);
+    buf = NULL;
+
+    return EX_OK;
+
+error:
+    lisafs_path_free(lisa_path);
+    lisa_path = NULL;
+
+    free(buf);
+    buf = NULL;
+
+    return err;
+}
+
+
 // MARK: - list command
 
 int lisafs_list_print_directory(lisafs_directrec * _Nonnull directory, void * _Nullable context);
@@ -106,12 +208,7 @@ int lisafs_list_print_thread(lisafs_threadrec * _Nonnull thread, void * _Nullabl
     char threadname[33] = {0};
     memcpy(threadname, &thread->myName[1], thread->myName[0]);
 
-    if (threadname[0] == 0) {
-        threadname[0] = '-';
-        threadname[1] = '\0';
-    }
-
-    fprintf(stdout, "%s:" "\n", threadname);
+    fprintf(stdout, "-%s:" "\n", threadname);
 
     return 0;
 }

@@ -37,6 +37,7 @@ struct lisafs_command {
     lisafs_command_func function;
     const char * const description;
 } lisafs_commands[] = {
+    { "extract",    lisafs_extract,     "extract path""\t- extract the file at the given Lisa path" },
     { "list",       lisafs_list,        "list" "\t"   "\t- list all files on the image" },
 
 #if LISAFS_ENABLE_DEV_COMMANDS
