@@ -34,6 +34,11 @@ int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
 
     char *path = argv[1];
 
+    bool convert_text = false;
+    if ((argc == 3) && (strncmp(argv[2], "-t", 2) == 0)) {
+        convert_text = true;
+    }
+
     lisa_path = lisafs_path_from_string(path);
     if (lisa_path == NULL) {
         const char *errstr = strerror(errno);
@@ -89,12 +94,59 @@ int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
         goto error;
     }
 
-    size_t items_written = fwrite(buf, buf_size, 1, outfile);
-    if (items_written != 1) {
-        const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error writing output file '%s': %s" "\n", program_name, outname, errstr);
-        err = EX_IOERR;
-        goto error;
+    // By default, write out the file contents unadulterated. But if
+    // the user passes -t, also convert the file to a modern UNIX-style
+    // text format instead of Lisa's weird paged-and-compressed format.
+
+    if (convert_text == false) {
+        size_t items_written = fwrite(buf, buf_size, 1, outfile);
+        if (items_written != 1) {
+            const char *errstr = strerror(errno);
+            fprintf(stderr, "%s: error writing output file '%s': %s" "\n", program_name, outname, errstr);
+            err = EX_IOERR;
+            goto error;
+        }
+    } else {
+        if ((buf_size < 1024) || ((buf_size % 1024) != 0)) {
+            fprintf(stderr, "%s: file '%s' size %zd is wrong for text" "\n", program_name, path, buf_size);
+            err = EX_DATAERR;
+            goto error;
+        }
+
+        // Start at the 1024th byte, skipping the first "page."
+
+        bool saw_tabcomp = false;
+        for (size_t i = 1024; i < buf_size; i++) {
+            uint8_t ch = buf[i];
+            switch (ch) {
+                case 0x00:
+                case 0xff:
+                    // Skip NUL and DEL characters, they're padding and EOF.
+                    break;
+
+                case 0x0D:
+                    // Turn CR into LF.
+                    fputc('\n', outfile);
+                    break;
+
+                case 0x10:
+                    // Set a flag when we see a "tab compression" char.
+                    saw_tabcomp = true;
+                    break;
+
+                default:
+                    if (saw_tabcomp) {
+                        // Insert spaces.
+                        for (int j = 0; j < (ch - 0x20); j++) {
+                            fputc(' ', outfile);
+                        }
+                        saw_tabcomp = false;
+                    } else {
+                        fputc(ch, outfile);
+                    }
+                    break;
+            }
+        }
     }
 
     fclose(outfile);
