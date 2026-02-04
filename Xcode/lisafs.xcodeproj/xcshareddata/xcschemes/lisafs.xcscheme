@@ -58,7 +58,7 @@
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
-            argument = "sfextract 29"
+            argument = "list"
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>

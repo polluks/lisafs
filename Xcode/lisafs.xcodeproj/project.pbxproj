@@ -9,7 +9,7 @@
 /* Begin PBXCopyFilesBuildPhase section */
 		9F7B55982F2EEF2C00787D3E /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
-			dstPath = /usr/share/man/man1/;
+			dstPath = "$(INSTALL_PATH)/../share/man/man1";
 			dstSubfolder = None;
 			files = (
 			);
@@ -63,11 +63,20 @@
 		};
 /* End PBXGroup section */
 
+/* Begin PBXHeadersBuildPhase section */
+		9F6AFC4F2F340C3D00B56A0E /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			files = (
+			);
+		};
+/* End PBXHeadersBuildPhase section */
+
 /* Begin PBXNativeTarget section */
 		9F7B55992F2EEF2C00787D3E /* lisafs */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 9F7B55A12F2EEF2C00787D3E /* Build configuration list for PBXNativeTarget "lisafs" */;
 			buildPhases = (
+				9F6AFC4F2F340C3D00B56A0E /* Headers */,
 				9F7B55962F2EEF2C00787D3E /* Sources */,
 				9F7B55972F2EEF2C00787D3E /* Frameworks */,
 				9F7B55982F2EEF2C00787D3E /* CopyFiles */,
