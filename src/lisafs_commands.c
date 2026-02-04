@@ -26,31 +26,58 @@ int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
     int err;
 
     if (argc < 2) {
-        fprintf(stderr, "%s: insufficient arguments (%d)" "\n", program_name, argc);
+        fprintf(stderr, "%s %s: insufficient arguments (%d)" "\n", program_name, command_name, argc);
         print_usage();
         err = EX_USAGE;
         goto error;
     }
 
-    char *path = argv[1];
+    char *path = argv[argc - 1];;
+    enum output_style {
+        preferred = 0,
+        binary,
+        text,
+    } output_style = preferred;
 
-    bool convert_text = false;
-    if ((argc == 3) && (strncmp(argv[2], "-t", 2) == 0)) {
-        convert_text = true;
+    for (int i = 1; i < (argc - 1); i++) {
+        if (strncmp("-t", argv[i], 2) == 0) {
+            output_style = text;
+        } else if (strncmp("-b", argv[i], 2) == 0) {
+            output_style = binary;
+        } else {
+            fprintf(stderr, "%s %s: unknown flag '%s'" "\n", program_name, command_name, argv[i]);
+            print_usage();
+            err = EX_USAGE;
+            goto error;
+        }
     }
 
     lisa_path = lisafs_path_from_string(path);
     if (lisa_path == NULL) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error decomposing path '%s': %s" "\n", program_name, path, errstr);
+        fprintf(stderr, "%s %s: error decomposing path '%s': %s" "\n", program_name, command_name, path, errstr);
         err = EX_DATAERR;
         goto error;
+    }
+
+    // Determine whether to prefer text or binary based on extension.
+
+    if (output_style == preferred) {
+        const char *last_component = lisa_path->components[lisa_path->component_count - 1];
+        const char *last_component_extension = strrchr(last_component, '.');
+        if (   (last_component_extension != NULL)
+            && (strncasecmp(last_component_extension, ".text", 5) == 0))
+        {
+            output_style = text;
+        } else {
+            output_style = binary;
+        }
     }
 
     lisafs_fileid lisa_file = lisafs_lookup_sfile(image, lisa_path);
     if (lisa_file == -1) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error accessing file at path '%s': %s" "\n", program_name, path, errstr);
+        fprintf(stderr, "%s %s: error accessing file at path '%s': %s" "\n", program_name, command_name, path, errstr);
         err = EX_NOINPUT;
         goto error;
     }
@@ -58,14 +85,14 @@ int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
     size_t buf_size = lisafs_get_sfile_size(image, lisa_file);
     if (buf_size == -1) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error finding size of file at path '%s': %s" "\n", program_name, path, errstr);
+        fprintf(stderr, "%s %s: error finding size of file at path '%s': %s" "\n", program_name, command_name, path, errstr);
         err = EX_OSERR;
         goto error;
     }
 
     buf = calloc(sizeof(uint8_t), buf_size);
     if (buf == NULL) {
-        fprintf(stderr, "%s: cannot allocate %zd byte buffer for file at path '%s'" "\n", program_name, buf_size, path);
+        fprintf(stderr, "%s %s: cannot allocate %zd byte buffer for file at path '%s'" "\n", program_name, command_name, buf_size, path);
         err = EX_OSERR;
         goto error;
     }
@@ -73,7 +100,7 @@ int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
     int read_err = lisafs_read_sfile(image, lisa_file, buf, buf_size);
     if (read_err == -1) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error reading file at path '%s': %s" "\n", program_name, path, errstr);
+        fprintf(stderr, "%s %s: error reading file at path '%s': %s" "\n", program_name, command_name, path, errstr);
         err = EX_IOERR;
         goto error;
     }
@@ -89,26 +116,27 @@ int lisafs_extract(int argc, char * _Nullable * _Nonnull argv)
     FILE *outfile = fopen(outname, "wb");
     if (outfile == NULL) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error opening output file '%s': %s" "\n", program_name, outname, errstr);
+        fprintf(stderr, "%s %s: error opening output file '%s': %s" "\n", program_name, command_name, outname, errstr);
         err = EX_CANTCREAT;
         goto error;
     }
 
     // By default, write out the file contents unadulterated. But if
     // the user passes -t, also convert the file to a modern UNIX-style
-    // text format instead of Lisa's weird paged-and-compressed format.
+    // text format instead of Lisa's weird "tab-compressed 1KB page
+    // with 1KB leader page" format.
 
-    if (convert_text == false) {
+    if (output_style == binary) {
         size_t items_written = fwrite(buf, buf_size, 1, outfile);
         if (items_written != 1) {
             const char *errstr = strerror(errno);
-            fprintf(stderr, "%s: error writing output file '%s': %s" "\n", program_name, outname, errstr);
+            fprintf(stderr, "%s %s: error writing output file '%s': %s" "\n", program_name, command_name, outname, errstr);
             err = EX_IOERR;
             goto error;
         }
     } else {
         if ((buf_size < 1024) || ((buf_size % 1024) != 0)) {
-            fprintf(stderr, "%s: file '%s' size %zd is wrong for text" "\n", program_name, path, buf_size);
+            fprintf(stderr, "%s %s: file '%s' size %zd is wrong for text" "\n", program_name, command_name, path, buf_size);
             err = EX_DATAERR;
             goto error;
         }
@@ -194,7 +222,7 @@ int lisafs_list(int argc, char * _Nullable * _Nonnull argv)
 
     if (iterate_err == -1) {
         const char *errstr = strerror(errno);
-        fprintf(stderr, "%s: error iterating %s: %s" "\n", program_name, image_file_path, errstr);
+        fprintf(stderr, "%s %s: error iterating %s: %s" "\n", program_name, command_name, image_file_path, errstr);
         return EX_DATAERR;
     }
 

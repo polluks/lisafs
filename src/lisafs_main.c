@@ -35,18 +35,19 @@ typedef int (*lisafs_command_func)(int argc, char * _Nullable * _Nonnull argv);
 struct lisafs_command {
     const char * const name;
     lisafs_command_func function;
+    const char * const example;
     const char * const description;
 } lisafs_commands[] = {
-    { "extract",    lisafs_extract,     "extract path""\t- extract the file at the given Lisa path" },
-    { "list",       lisafs_list,        "list" "\t"   "\t- list all files on the image" },
+    { "extract",    lisafs_extract,     "extract [-t|-b] path", "extract file at Lisa path, text or binary" },
+    { "list",       lisafs_list,        "list",                 "list all files on the image" },
 
 #if LISAFS_ENABLE_DEV_COMMANDS
-    { "dumpblock",  lisafs_dumpblock,   "dumpblock n" "\t- hex dump raw block n" },
-    { "dumppage",   lisafs_dumppage,    "dumppage n"  "\t- hex dump of raw page n" },
-    { "fsinfo",     lisafs_fsinfo,      "fsinfo"      "\t- print filesystem info" },
-    { "imageinfo",  lisafs_imageinfo,   "imageinfo"   "\t- print disk image info" },
-    { "sfextract",  lisafs_sfextract,   "sfextract n" "\t- extract sfile n (using hints)" },
-    { "sflist",     lisafs_sflist,      "sflist [-l]" "\t- list sfiles (using hints)", },
+    { "dumpblock",  lisafs_dumpblock,   "dumpblock n",          "hex dump raw block n" },
+    { "dumppage",   lisafs_dumppage,    "dumppage n",           "hex dump of raw page n" },
+    { "fsinfo",     lisafs_fsinfo,      "fsinfo",               "print filesystem info" },
+    { "imageinfo",  lisafs_imageinfo,   "imageinfo",            "print disk image info" },
+    { "sfextract",  lisafs_sfextract,   "sfextract n",          "extract sfile n (using hints)" },
+    { "sflist",     lisafs_sflist,      "sflist [-l]",          "list sfiles (using hints)", },
 #endif
 
     { NULL, NULL },
@@ -55,17 +56,39 @@ struct lisafs_command {
 
 void print_usage(void)
 {
+    fprintf(stderr, "\n");
     fprintf(stderr, "Usage:" "\n");
     fprintf(stderr, " %s image-file <command> [args]" "\n", program_name);
     fprintf(stderr, " Commands are:" "\n");
 
+    // Go through the commands twice to produce nicely-formatted columns.
+
+    int max_name = 0, max_example = 0, max_description = 0;
+
     struct lisafs_command *command = NULL;
     const size_t lisafs_commands_count = sizeof(lisafs_commands) / sizeof(struct lisafs_command);
+
     for (int i = 0; i < lisafs_commands_count; i++) {
         command = &lisafs_commands[i];
         if (command->name == NULL) break;
 
-        fprintf(stderr, "  %s" "\n", command->description);
+        size_t name_len = strlen(command->name);
+        size_t example_len = strlen(command->example);
+        size_t description_len = strlen(command->description);
+
+        if (name_len > max_name) max_name = (int)name_len;
+        if (example_len > max_example) max_example = (int)example_len;
+        if (description_len > max_description) max_description = (int)description_len;
+    }
+
+    for (int i = 0; i < lisafs_commands_count; i++) {
+        command = &lisafs_commands[i];
+        if (command->name == NULL) break;
+
+        fprintf(stderr, "  %*s  %*s  %*s" "\n",
+                -max_name, command->name,
+                -max_example, command->example,
+                -max_description, command->description);
     }
 }
 
@@ -78,13 +101,21 @@ int main(int argc, char **argv)
 
     if (argc < 3) {
         fprintf(stderr, "%s: Insufficient arguments (%d)." "\n", program_name, argc);
-        fprintf(stderr, "\n");
         print_usage();
         return EX_USAGE;
     }
 
     image_file_path = argv[1];
     command_name = argv[2];
+
+    const char *image_file_path_extension = strrchr(image_file_path, '.');
+    if (   (image_file_path_extension == NULL)
+        || (strncasecmp(image_file_path_extension, ".dc42", 5) != 0))
+    {
+        fprintf(stderr, "%s: Only DiskCopy 4.2 (.dc42) images are supported at this time." "\n", program_name);
+        print_usage();
+        return EX_USAGE;
+    }
 
     // Attach the disk image.
 
