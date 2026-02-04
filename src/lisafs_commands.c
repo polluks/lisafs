@@ -211,7 +211,13 @@ int lisafs_list_directory_entry_iterator(lisafs_centry * _Nonnull centry, void *
 
 int lisafs_list(int argc, char * _Nullable * _Nonnull argv)
 {
+
     lisafs_fsversion fsversion = lisafs_get_fsversion(image);
+
+    const char *versstr = lisafs_fsversion_string(fsversion);
+    const char *volname = lisafs_get_volname(image);
+
+    fprintf(stdout, "Volume (%s): %s" "\n", versstr, volname);
 
     int iterate_err;
     if (fsversion == release3) {
