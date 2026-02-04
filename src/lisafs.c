@@ -1168,4 +1168,127 @@ int lisafs_iterate_directory_entries(lisafs_image * _Nonnull image,
 }
 
 
+lisafs_path * _Nullable
+lisafs_path_from_string(const char *string)
+{
+    lisafs_path *path = NULL;
+
+    path = calloc(sizeof(lisafs_path), 1);
+    if (path == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    // Make one pass through the string to get its length, also track
+    // the end of the string too.
+
+    const size_t string_len = strlen(string);
+    if (string_len == 0) {
+        errno = ENOENT;
+        goto error;
+    }
+
+    const char *string_end = &string[string_len];
+
+    // If there's a trailing hyphen, that's invalid path syntax.
+
+    if (string_end[-1] == '-') {
+        errno = EINVAL;
+        goto error;
+    }
+
+    // Make one pass through the string to count its path components
+    // and create the array to hold them.
+
+    size_t hyphens = 0;
+    char *hyphen = strchr(string, '-');
+    while (hyphen != NULL) {
+        hyphens++;
+        hyphen = strchr(&hyphen[1], '-');
+    }
+
+    if (string[0] != '-') {
+        // If there's no leading hyphen, treat one as being present
+        // implicitly.
+
+        hyphens++;
+    }
+
+    path->components = calloc(sizeof(char *), hyphens);
+    if (path->components == NULL) {
+        errno = ENOMEM;
+        goto error;
+    }
+
+    path->component_count = hyphens;
+
+    // Make a final pass through the string to extract path components.
+
+    const char * _Nullable string_cur = string;
+    if (string_cur[0] == '-') {
+        // If there's a leading hyphen, skip it.
+
+        string_cur = &string_cur[1];
+    }
+
+    for (size_t i = 0; i < hyphens; i++) {
+        char * _Nullable next_hyphen = strchr(string_cur, '-');
+
+        ptrdiff_t count;
+        if (next_hyphen == NULL) {
+            // If there's no next hyphen, the current component runs
+            // from the current string position to the string's end.
+
+            count = string_end - string_cur;
+        } else {
+            // If there is a next hyphen, the current component runs
+            // from the current string position to (but not through)
+            // the hyphen's position.
+
+            count = next_hyphen - string_cur;
+        }
+
+        // Put a copy of the component into the array.
+
+        char *component = calloc(sizeof(char), count + 1);
+        if (component == NULL) {
+            errno = ENOMEM;
+            goto error;
+        }
+
+        strncpy(component, string_cur, count);
+
+        path->components[i] = component;
+
+        string_cur = &next_hyphen[1];
+    }
+
+    return path;
+
+error:
+    lisafs_path_free(path);
+    path = NULL;
+
+    return NULL;
+}
+
+
+void
+lisafs_path_free(lisafs_path * _Nullable path)
+{
+    if (path == NULL) return;
+
+    int savederrno = errno;
+
+    for (int i = 0; i < path->component_count; i++) {
+        free(path->components[i]);
+        path->components[i] = NULL;
+    }
+
+    free(path);
+
+    errno = savederrno;
+}
+
+
 LISAFS_SOURCE_END

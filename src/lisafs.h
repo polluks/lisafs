@@ -625,6 +625,40 @@ int lisafs_iterate_directory_entries(lisafs_image * _Nonnull image,
                                      void * _Nullable context);
 
 
+/*!
+    A decomposed Lisa filesystem path. The components of the decomposed
+    path are in left-to-right (containment) order.
+ */
+struct lisafs_path {
+    char * _Nonnull * _Nonnull components;
+    lisafs_integer component_count;
+};
+typedef struct lisafs_path lisafs_path;
+
+/*!
+    Create a new ``lisa_path`` instance containing the components of
+    the given string in canonical Lisa path format. Returns `NULL` and
+    sets `errno` on failure.
+
+    - NOTE: This function does not support wildcards, does not support
+            prepending a device name component, and does not support
+            paths relative to anything but the volume root. (That is,
+            one can omit a leading `-` character.)
+ */
+LISAFS_EXTERN
+lisafs_path * _Nullable
+lisafs_path_from_string(const char *string);
+
+/*!
+    Release the storage used by the given ``lisa_path`` instance.
+
+    - NOTE: Preserves `errno`.
+ */
+LISAFS_EXTERN
+void
+lisafs_path_free(lisafs_path * _Nullable path);
+
+
 LISAFS_HEADER_END
 
 
