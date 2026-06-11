@@ -96,7 +96,7 @@ spaces is represented by ASCII 16 followed by ASCII 40.)
 
 To accommodate these on modern UNIX-derived platforms, the `extract`
 subcommand will transparently convert files whose name ends in `.text`
-(case-insenstive) to drop the leading page, elide any 0x00 or 0xFF
+(case-insensitive) to drop the leading page, elide any 0x00 or 0xFF
 padding bytes, and expand any compressed space sequences. The bytes are
 otherwise uninterpreted.
 
